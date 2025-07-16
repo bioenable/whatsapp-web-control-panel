@@ -15,8 +15,8 @@ A modern, user-friendly Express.js and Bootstrap-based web control panel for Wha
 
 1. **Clone the repository:**
    ```sh
-   git clone https://github.com/YOUR-USERNAME/YOUR-REPO-NAME.git
-   cd YOUR-REPO-NAME
+   git clone https://github.com/bioenable/whatsapp-web-control-panel.git
+   cd whatsapp-web-control-panel
    ```
 2. **Install dependencies:**
    ```sh
