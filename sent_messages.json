@@ -1,0 +1,102 @@
+[
+  {
+    "to": "917972402648",
+    "message": "Test template 4",
+    "media": {
+      "filename": "bb7705d0-9f6e-42bf-92bf-0d6c214d03f5.png",
+      "mimetype": "image/png"
+    },
+    "status": "sent",
+    "time": "2025-07-17T06:02:22.446Z"
+  },
+  {
+    "to": "917972402648@c.us",
+    "message": "Test template 4",
+    "media": {
+      "filename": "bb7705d0-9f6e-42bf-92bf-0d6c214d03f5.png",
+      "mimetype": "image/png"
+    },
+    "status": "sent",
+    "time": "2025-07-17T06:01:45.092Z"
+  },
+  {
+    "to": "917972402648@c.us",
+    "message": "Test PK1 template",
+    "media": {
+      "filename": "Screenshot 2025-07-15 at 12.14.31â¯PM.png",
+      "mimetype": "image/png"
+    },
+    "status": "sent",
+    "time": "2025-07-17T05:41:05.873Z"
+  },
+  {
+    "to": "917972402648@c.us",
+    "message": "Test PK1 template",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:47:20.437Z"
+  },
+  {
+    "to": "917972402648@c.us",
+    "message": "Test PK1 template",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:47:07.377Z"
+  },
+  {
+    "to": "917972402648",
+    "message": "Test PK1 template",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:46:38.126Z"
+  },
+  {
+    "to": "917972402648",
+    "message": "Test PK1 template",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:44:48.286Z"
+  },
+  {
+    "to": "917972402648@c.us",
+    "message": "Test PK1 template",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:44:31.229Z"
+  },
+  {
+    "to": "917972402648@c.us",
+    "message": "Test PK1 template",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:44:02.079Z"
+  },
+  {
+    "to": "917972402648",
+    "message": "Test PK1 template",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:42:17.987Z"
+  },
+  {
+    "to": "917972402648",
+    "message": "test 7",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:23:47.644Z"
+  },
+  {
+    "to": "917972402648",
+    "message": "test 7",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:23:36.867Z"
+  },
+  {
+    "to": "917972402648",
+    "message": "test 6",
+    "media": null,
+    "status": "sent",
+    "time": "2025-07-16T18:23:22.124Z"
+  }
+]

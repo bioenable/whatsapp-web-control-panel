@@ -1,63 +1,58 @@
 # WhatsApp Web Control Panel
 
-A modern, user-friendly Express.js and Bootstrap-based web control panel for WhatsApp automation, built on top of [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js).
+A professional, robust WhatsApp Web Control Panel built with Express.js, whatsapp-web.js, and a modern Bootstrap/Tailwind UI (no React). Designed for advanced message management, bulk messaging, and template workflows.
 
 ## Features
-- Beautiful, responsive web UI with Bootstrap 5
-- Tabs for Chats and Send Message
-- Multi-recipient selection and direct chat/group messaging
-- Media support (images, videos, PDFs) with live preview
-- Live WhatsApp status and QR code login
-- REST API endpoints for status, chats, messages, and sending messages
-- Robust backend with Express.js
 
-## Installation
+- **Templates Tab**: Create, edit, preview, and delete message templates (text + media). Media is uploaded and stored locally. Templates can be used in Send Message and Chats tabs.
+- **Bulk Messaging Tab**: Import CSVs with number, message, media, and send_datetime. Robust CSV parsing (handles quotes/commas). Schedule, test, and manage bulk messages. Includes a "Test" button for instant or scheduled testing.
+- **Send Message Tab**: Multi-recipient sending, media attachments, template selection, live preview, and persistent sent messages log.
+- **Chats Tab**: WhatsApp Web-style chat list, message area, and input bar. Supports template selection and media preview.
+- **UI/UX**: Built with Tailwind CSS and shadcn/ui patterns. Responsive, professional, and user-friendly.
+- **Debugging & Persistence**: All data is stored in JSON files. Debug logs for sent messages and file writes.
+- **Timezone Handling**: All times are shown and generated in the system/server timezone (or IST fallback). Bulk CSV sample and imports use local time for clarity.
 
-1. **Clone the repository:**
-   ```sh
-   git clone https://github.com/bioenable/whatsapp-web-control-panel.git
-   cd whatsapp-web-control-panel
-   ```
-2. **Install dependencies:**
-   ```sh
-   npm install
-   ```
-3. **Start the server:**
-   ```sh
-   npm start
-   # or
-   node server.js
-   ```
-4. **Open your browser:**
-   Visit [http://localhost:5014](http://localhost:5014)
+## Setup Instructions
 
-## Usage
-- Scan the QR code with your WhatsApp mobile app to log in.
-- Use the Chats tab to view and send messages directly in any chat or group.
-- Use the Send Message tab to send messages or media to one or more recipients.
+### Requirements
+- Node.js 16+
+- npm
+- WhatsApp account (for whatsapp-web.js authentication)
 
-## Project Structure
-```
-/               # Main app code and assets
-|-- public/     # Frontend (HTML, JS, CSS)
-|-- server.js   # Express.js backend
-|-- whatsapp-web/ # whatsapp-web.js library (submodule or dependency)
-|-- package.json
-|-- .gitignore
+### Installation
+```sh
+npm install
 ```
 
-## API Endpoints
-- `GET /api/status` — WhatsApp client status and QR code
-- `GET /api/chats` — List all chats
-- `GET /api/chats/:id/messages` — Get messages for a chat
-- `POST /api/messages/send` — Send message (with optional media)
+### Running the App
+```sh
+npm start
+```
+- The server will run at [http://localhost:5014](http://localhost:5014)
+- On first run, scan the QR code with your WhatsApp app.
+
+### File Structure
+- `server.js` — Main Express backend and WhatsApp integration
+- `public/` — Static frontend (HTML, JS, CSS)
+- `public/message-templates/` — Uploaded template media
+- `templates.json` — Template data
+- `bulk_messages.json` — Bulk message records
+- `sent_messages.json` — Sent message log
+
+## Bulk Messaging Testing
+- Use the **Download Sample CSV** button in the Bulk tab to get a ready-to-import CSV with tech jokes and public domain images.
+- All sample send times are 20+ minutes in the future (buffer for import delay).
+- After import, use the **Test** button to send immediately or reschedule for 1 min.
+- All times are shown in your system/server timezone for clarity.
+
+## Advanced Features
+- Robust CSV import (handles quoted fields, commas, and timezones)
+- Media can be uploaded or referenced by URL (for bulk)
+- Scheduler ensures no double-sending; only pending messages are sent
+- Test actions update status and scheduling as expected
 
 ## Contributing
-Pull requests are welcome! For major changes, please open an issue first to discuss what you would like to change.
+Pull requests and issues are welcome! Please open an issue for bugs or feature requests.
 
 ## License
-This project is licensed under the Apache 2.0 License. See [LICENSE](whatsapp-web/LICENSE) for details.
-
----
-
-*This project is not affiliated with WhatsApp Inc. Use at your own risk.* 
+MIT License 

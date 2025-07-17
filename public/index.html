@@ -4,244 +4,266 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>WhatsApp Web Control</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.3/font/bootstrap-icons.css">
-    <style>
-        body {
-            background-color: #f0f2f5;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        .navbar {
-            background-color: #128C7E;
-        }
-        .nav-link {
-            color: #fff;
-            font-weight: 500;
-        }
-        .nav-link.active {
-            background-color: #075E54 !important;
-            color: #fff !important;
-        }
-        .card {
-            border-radius: 10px;
-            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-            margin-bottom: 20px;
-        }
-        .chat-item {
-            cursor: pointer;
-            transition: background-color 0.2s;
-        }
-        .chat-item:hover {
-            background-color: #f5f5f5;
-        }
-        .chat-item.active {
-            background-color: #e9f5ff;
-        }
-        .message-container {
-            height: 400px;
-            overflow-y: auto;
-        }
-        .message {
-            border-radius: 15px;
-            padding: 8px 12px;
-            margin: 5px 0;
-            max-width: 80%;
-            word-wrap: break-word;
-        }
-        .message-received {
-            background-color: #fff;
-            align-self: flex-start;
-        }
-        .message-sent {
-            background-color: #dcf8c6;
-            align-self: flex-end;
-        }
-        .media-preview {
-            max-width: 200px;
-            max-height: 200px;
-            object-fit: contain;
-        }
-        .status-badge {
-            font-size: 0.75rem;
-        }
-        #qrcode {
-            text-align: center;
-            margin: 20px 0;
-        }
-        #status-indicator {
-            padding: 5px 10px;
-            border-radius: 15px;
-            font-size: 0.8rem;
-            font-weight: bold;
-        }
-        .status-connecting {
-            background-color: #ffc107;
-            color: #000;
-        }
-        .status-connected {
-            background-color: #28a745;
-            color: #fff;
-        }
-        .status-disconnected {
-            background-color: #dc3545;
-            color: #fff;
-        }
-    </style>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Optionally configure Tailwind for shadcn/ui look -->
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'ui-sans-serif', 'system-ui'],
+            },
+          },
+        },
+      }
+    </script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,500,600,700&display=swap">
 </head>
-<body>
-    <nav class="navbar navbar-expand-lg navbar-dark">
-        <div class="container">
-            <a class="navbar-brand" href="#">
-                <i class="bi bi-whatsapp me-2"></i>
+<body class="bg-gray-100 font-sans">
+    <nav class="bg-green-600 shadow">
+        <div class="container mx-auto px-4 py-3 flex items-center justify-between">
+            <a class="flex items-center text-white font-bold text-xl" href="#">
+                <svg class="w-7 h-7 mr-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.72 11.06a4.5 4.5 0 01-6.36 6.36l-2.12-2.12a4.5 4.5 0 016.36-6.36l2.12 2.12z"></path></svg>
                 WhatsApp Web Control
             </a>
-            <div id="status-indicator" class="status-connecting">
+            <div id="status-indicator" class="px-3 py-1 rounded-full text-sm font-semibold bg-yellow-400 text-black">
                 Connecting...
             </div>
         </div>
     </nav>
-
-    <div class="container mt-4">
-        <div id="qrcode-container">
+    <div class="container mx-auto mt-6 px-4">
+        <div id="qrcode-container" class="mb-4">
             <!-- QR code will be displayed here when needed -->
         </div>
-
-        <ul class="nav nav-tabs mb-4" id="myTab" role="tablist">
-            <li class="nav-item" role="presentation">
-                <button class="nav-link active" id="chats-tab" data-bs-toggle="tab" data-bs-target="#chats" type="button" role="tab" aria-controls="chats" aria-selected="true">
-                    <i class="bi bi-chat-left-text me-2"></i>Chats
-                </button>
-            </li>
-            <li class="nav-item" role="presentation">
-                <button class="nav-link" id="send-tab" data-bs-toggle="tab" data-bs-target="#send" type="button" role="tab" aria-controls="send" aria-selected="false">
-                    <i class="bi bi-send me-2"></i>Send Message
-                </button>
-            </li>
-        </ul>
-
-        <div class="tab-content" id="myTabContent">
-            <!-- Chats Tab -->
-            <div class="tab-pane fade show active" id="chats" role="tabpanel" aria-labelledby="chats-tab">
-                <div class="row">
-                    <div class="col-md-4">
-                        <div class="card">
-                            <div class="card-header bg-light">
-                                <div class="input-group">
-                                    <input type="text" class="form-control" placeholder="Search chats..." id="chat-search">
-                                    <button class="btn btn-outline-secondary" type="button">
-                                        <i class="bi bi-search"></i>
-                                    </button>
-                                </div>
+        <div>
+            <ul class="flex border-b mb-6" id="myTab" role="tablist">
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-green-700 border-b-2 border-green-700 font-semibold" id="chats-tab" data-tab="chats" type="button" role="tab" aria-controls="chats" aria-selected="true">
+                        Chats
+                    </button>
+                </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="send-tab" data-tab="send" type="button" role="tab" aria-controls="send" aria-selected="false">
+                        Send Message
+                    </button>
+                </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="templates-tab" data-tab="templates" type="button" role="tab" aria-controls="templates" aria-selected="false">
+                        Templates
+                    </button>
+                </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="bulk-tab" data-tab="bulk" type="button" role="tab" aria-controls="bulk" aria-selected="false">
+                        Bulk
+                    </button>
+                </li>
+            </ul>
+            <div id="tab-content">
+                <div id="chats" class="tab-pane">
+                    <div class="flex h-[600px] bg-white rounded shadow overflow-hidden">
+                        <!-- Sidebar: Chat List -->
+                        <div class="w-1/3 border-r overflow-y-auto" id="chat-list-sidebar">
+                            <div class="flex justify-between items-center p-2 border-b">
+                                <span class="font-semibold">Chats</span>
+                                <button id="refresh-chats-btn" class="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-xs">Refresh</button>
                             </div>
-                            <div class="card-body p-0">
-                                <div class="list-group list-group-flush" id="chat-list">
-                                    <!-- Chat list will be populated here -->
-                                    <div class="text-center py-4 text-muted">
-                                        <i class="bi bi-hourglass-split"></i>
-                                        <p>Loading chats...</p>
-                                    </div>
-                                </div>
-                            </div>
+                            <div id="chat-list" class="divide-y"></div>
                         </div>
-                    </div>
-                    <div class="col-md-8">
-                        <div class="card">
-                            <div class="card-header bg-light" id="chat-header">
-                                <h5 class="mb-0">Select a chat</h5>
-                            </div>
-                            <div class="card-body message-container" id="message-container">
-                                <div class="text-center py-5 text-muted">
-                                    <i class="bi bi-chat-square-text fs-1"></i>
-                                    <p class="mt-2">Select a chat to view messages</p>
-                                </div>
-                            </div>
-                            <!-- Chat message input bar -->
-                            <form id="chat-send-form" class="d-flex align-items-end gap-2 p-2 border-top" style="background:#f8f9fa;">
-                                <input type="file" id="chat-attachment" class="form-control form-control-sm" style="max-width:160px;" accept="image/*,video/*,application/pdf">
-                                <textarea id="chat-message-text" class="form-control" rows="1" placeholder="Type a message..." style="resize:none;"></textarea>
-                                <button type="submit" class="btn btn-success"><i class="bi bi-send"></i></button>
+                        <!-- Main: Chat Messages -->
+                        <div class="flex-1 flex flex-col">
+                            <div id="chat-header" class="p-3 border-b bg-gray-50 font-semibold h-14 flex items-center">Select a chat</div>
+                            <div id="message-container" class="flex-1 overflow-y-auto p-3 bg-gray-50"></div>
+                            <form id="chat-send-form" class="flex items-end gap-2 p-3 border-t bg-white" style="">
+                                <select id="chat-template-select" class="border rounded px-2 py-1 mr-2 min-w-[120px]">
+                                    <option value="">-- Template --</option>
+                                </select>
+                                <input type="file" id="chat-attachment" class="hidden" accept="image/*,video/*,application/pdf">
+                                <label for="chat-attachment" class="cursor-pointer text-gray-500 hover:text-green-600"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l7.07-7.07a4 4 0 00-5.656-5.657l-7.071 7.07a6 6 0 108.485 8.486L20.485 13" /></svg></label>
+                                <textarea id="chat-message-text" class="flex-1 border rounded px-3 py-2 resize-none" rows="1" placeholder="Type a message..." style="min-height:40px;"></textarea>
+                                <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Send</button>
                             </form>
                         </div>
                     </div>
                 </div>
-            </div>
-
-            <!-- Send Message Tab -->
-            <div class="tab-pane fade" id="send" role="tabpanel" aria-labelledby="send-tab">
-                <div class="card">
-                    <div class="card-header bg-light">
-                        <h5 class="mb-0">Send New Message</h5>
-                    </div>
-                    <div class="card-body">
-                        <form id="send-message-form">
-                            <div class="mb-3">
-                                <label for="recipient-select" class="form-label">Select Recipient(s)</label>
-                                <select class="form-select" id="recipient-select" multiple>
-                                    <option value="">-- Select chat(s) --</option>
-                                </select>
-                                <div class="form-text">Hold Ctrl (Windows) or Cmd (Mac) to select multiple chats.</div>
-                            </div>
-                            <div class="mb-3">
-                                <label for="recipient-input" class="form-label">Or Enter Phone Numbers (comma separated)</label>
-                                <input type="text" class="form-control" id="recipient-input" placeholder="e.g. 919876543210, 918123456789">
-                            </div>
-                            <div class="mb-3">
-                                <label for="message-text" class="form-label">Message</label>
-                                <textarea class="form-control" id="message-text" rows="4" placeholder="Type your message here..."></textarea>
-                            </div>
-                            <div class="mb-3">
-                                <label for="media-upload" class="form-label">Attach Media (optional)</label>
-                                <input class="form-control" type="file" id="media-upload" accept="image/*,video/*,application/pdf">
-                            </div>
-                            <div id="media-preview-container" class="mb-3 d-none">
-                                <label class="form-label">Preview</label>
-                                <div class="border rounded p-2 text-center">
-                                    <img id="image-preview" class="media-preview d-none" alt="Preview">
-                                    <video id="video-preview" class="media-preview d-none" controls></video>
-                                    <div id="file-preview" class="d-none">
-                                        <i class="bi bi-file-earmark-text fs-1"></i>
-                                        <p id="file-name"></p>
-                                    </div>
+                <div id="send" class="tab-pane hidden">
+                    <form id="send-message-form" class="space-y-4">
+                        <div class="mb-3">
+                            <label for="recipient-select" class="block text-sm font-medium mb-1">Select Recipient(s)</label>
+                            <select class="w-full border rounded px-3 py-2" id="recipient-select" multiple>
+                                <option value="">-- Select chat(s) --</option>
+                            </select>
+                            <div class="text-xs text-gray-500">Hold Ctrl (Windows) or Cmd (Mac) to select multiple chats.</div>
+                        </div>
+                        <div class="mb-3">
+                            <label for="recipient-input" class="block text-sm font-medium mb-1">Or Enter Phone Numbers (comma separated)</label>
+                            <input type="text" class="w-full border rounded px-3 py-2" id="recipient-input" placeholder="e.g. 919876543210, 918123456789">
+                        </div>
+                        <div class="mb-3 flex items-center gap-2">
+                            <label for="template-select" class="block text-sm font-medium mb-1">Use Template</label>
+                            <select id="template-select" class="border rounded px-2 py-1">
+                                <option value="">-- None --</option>
+                            </select>
+                            <button type="button" id="preview-template-btn" class="text-green-600 hover:underline text-xs hidden">Preview</button>
+                        </div>
+                        <div class="mb-3">
+                            <label for="message-text" class="block text-sm font-medium mb-1">Message</label>
+                            <textarea class="w-full border rounded px-3 py-2" id="message-text" rows="4" placeholder="Type your message here..."></textarea>
+                        </div>
+                        <div class="mb-3">
+                            <label for="media-upload" class="block text-sm font-medium mb-1">Attach Media (optional)</label>
+                            <input class="w-full border rounded px-3 py-2" type="file" id="media-upload" accept="image/*,video/*,application/pdf">
+                        </div>
+                        <div id="media-preview-container" class="mb-3 d-none">
+                            <label class="block text-sm font-medium mb-1">Preview</label>
+                            <div class="border rounded p-2 text-center">
+                                <img id="image-preview" class="media-preview d-none" alt="Preview">
+                                <video id="video-preview" class="media-preview d-none" controls></video>
+                                <div id="file-preview" class="d-none">
+                                    <p id="file-name"></p>
                                 </div>
                             </div>
-                            <div id="message-preview-area" class="mb-4">
-                                <!-- Live message preview will be rendered here by JS -->
+                        </div>
+                        <div id="message-preview-area" class="mb-4">
+                            <!-- Live message preview will be rendered here by JS -->
+                        </div>
+                        <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700" id="send-btn">
+                            Send Message
+                        </button>
+                    </form>
+                    <div class="card mt-4">
+                        <div class="card-header bg-light">
+                            <h5 class="mb-0">Sent Messages</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full bg-white rounded shadow text-sm">
+                                    <thead>
+                                        <tr>
+                                            <th class="px-2 py-1 text-left font-semibold">Recipient</th>
+                                            <th class="px-2 py-1 text-left font-semibold">Message</th>
+                                            <th class="px-2 py-1 text-left font-semibold">Status</th>
+                                            <th class="px-2 py-1 text-left font-semibold">Time</th>
+                                            <th class="px-2 py-1 text-left font-semibold">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="sent-messages">
+                                        <!-- Sent messages will be displayed here -->
+                                    </tbody>
+                                </table>
                             </div>
-                            <button type="submit" class="btn btn-primary" id="send-btn">
-                                <i class="bi bi-send me-2"></i>Send Message
-                            </button>
-                        </form>
+                        </div>
                     </div>
                 </div>
-
-                <div class="card mt-4">
-                    <div class="card-header bg-light">
-                        <h5 class="mb-0">Sent Messages</h5>
+                <div id="templates" class="tab-pane hidden">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-semibold">Templates</h2>
+                        <button id="add-template-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Add Template</button>
                     </div>
-                    <div class="card-body">
-                        <div class="table-responsive">
-                            <table class="table table-striped">
-                                <thead>
-                                    <tr>
-                                        <th>Recipient</th>
-                                        <th>Message</th>
-                                        <th>Status</th>
-                                        <th>Time</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="sent-messages">
-                                    <!-- Sent messages will be displayed here -->
-                                </tbody>
-                            </table>
+                    <div id="templates-list" class="space-y-2">
+                        <!-- Templates will be rendered here -->
+                    </div>
+                    <!-- Add/Edit Template Modal -->
+                    <div id="template-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-md p-6 relative">
+                            <button id="close-template-modal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700">&times;</button>
+                            <h3 id="template-modal-title" class="text-lg font-semibold mb-4">Add Template</h3>
+                            <form id="template-form" class="space-y-4" enctype="multipart/form-data">
+                                <input type="hidden" id="template-id">
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Name</label>
+                                    <input type="text" id="template-name" class="w-full border rounded px-3 py-2" required maxlength="50">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Text</label>
+                                    <textarea id="template-text" class="w-full border rounded px-3 py-2" rows="3" required maxlength="1000"></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Media (Image/Video/PDF, max 10MB)</label>
+                                    <input type="file" id="template-media-file" class="w-full border rounded px-3 py-2" accept="image/*,video/*,application/pdf">
+                                    <div id="template-media-preview" class="mt-2"></div>
+                                    <button type="button" id="remove-template-media-btn" class="text-red-600 hover:underline text-xs hidden mt-1">Remove Media</button>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-template-btn" class="px-4 py-2 rounded border">Cancel</button>
+                                    <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Save</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    <!-- Template Preview Modal -->
+                    <div id="template-preview-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-md p-6 relative">
+                            <button id="close-template-preview" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700">&times;</button>
+                            <h3 class="text-lg font-semibold mb-4">Template Preview</h3>
+                            <div id="template-preview-content">
+                                <!-- WhatsApp-style preview will be rendered here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div id="bulk" class="tab-pane hidden">
+                    <div class="mb-2 flex items-center gap-2">
+                        <span id="bulk-timezone-info" class="text-xs text-gray-700"></span>
+                    </div>
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="text-xl font-semibold">Bulk Messaging</h2>
+                        <form id="bulk-import-form" class="flex items-center gap-2" enctype="multipart/form-data">
+                            <input type="file" id="bulk-csv" accept=".csv" class="border rounded px-2 py-1" required>
+                            <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Import CSV</button>
+                        </form>
+                    </div>
+                    <div class="mb-2 flex items-center gap-2">
+                        <button id="download-sample-csv" class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Download Sample CSV</button>
+                        <span class="text-xs text-gray-500">Download a sample CSV with 3 tech jokes, ready for import and testing.</span>
+                    </div>
+                    <div id="bulk-import-errors" class="text-red-600 mb-2"></div>
+                    <div class="mb-4 flex items-center gap-2">
+                        <label for="bulk-import-filter" class="block text-sm font-medium">Filter by Import Filename:</label>
+                        <select id="bulk-import-filter" class="border rounded px-2 py-1"></select>
+                        <button id="bulk-delete-btn" class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-xs">Delete Import</button>
+                        <button id="bulk-cancel-btn" class="bg-yellow-500 text-white px-3 py-1 rounded hover:bg-yellow-600 text-xs">Cancel Import</button>
+                    </div>
+                    <div id="bulk-list-container" class="overflow-x-auto">
+                        <table class="min-w-full bg-white rounded shadow">
+                            <thead>
+                                <tr>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">#</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Number</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Message</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Media</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Send Datetime</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Import Filename</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Status</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Sent Datetime</th>
+                                    <th class="px-2 py-1 text-left text-xs font-semibold">Unique ID</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bulk-list">
+                                <!-- Bulk records will be rendered here -->
+                            </tbody>
+                        </table>
+                        <div class="flex justify-between items-center mt-2">
+                            <button id="bulk-prev-page" class="px-2 py-1 border rounded text-xs">Prev</button>
+                            <span id="bulk-page-info" class="text-xs"></span>
+                            <button id="bulk-next-page" class="px-2 py-1 border rounded text-xs">Next</button>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
     <script src="/js/main.js"></script>
+    <script>
+      // Simple tab switching logic
+      document.querySelectorAll('.tab-link').forEach(btn => {
+        btn.addEventListener('click', function() {
+          document.querySelectorAll('.tab-link').forEach(b => b.classList.remove('text-green-700', 'border-green-700'));
+          this.classList.add('text-green-700', 'border-green-700');
+          document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.add('hidden'));
+          document.getElementById(this.dataset.tab).classList.remove('hidden');
+        });
+      });
+    </script>
 </body>
 </html> 
