@@ -18,6 +18,8 @@ const chatMessageText = document.getElementById('chat-message-text');
 const chatAttachment = document.getElementById('chat-attachment');
 const refreshChatsBtn = document.getElementById('refresh-chats-btn');
 
+
+
 // --- Templates Tab Logic ---
 const templatesTab = document.getElementById('templates');
 const templatesList = document.getElementById('templates-list');
@@ -45,123 +47,16 @@ let templateMediaToRemove = false;
 const templateSelect = document.getElementById('template-select');
 const previewTemplateBtn = document.getElementById('preview-template-btn');
 
-// --- Bulk Tab Logic ---
-const bulkImportForm = document.getElementById('bulk-import-form');
-const bulkCsvInput = document.getElementById('bulk-csv');
-const bulkImportErrors = document.getElementById('bulk-import-errors');
-const bulkList = document.getElementById('bulk-list');
-const bulkListContainer = document.getElementById('bulk-list-container');
-const bulkImportFilter = document.getElementById('bulk-import-filter');
-const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
-const bulkCancelBtn = document.getElementById('bulk-cancel-btn');
-const bulkPrevPage = document.getElementById('bulk-prev-page');
-const bulkNextPage = document.getElementById('bulk-next-page');
-const bulkPageInfo = document.getElementById('bulk-page-info');
-
-let bulkRecords = [];
-let bulkPage = 1;
-let bulkLimit = 100;
-let bulkTotal = 0;
-let bulkCurrentImport = '';
-
-if (bulkImportForm) {
-    document.getElementById('bulk-tab').addEventListener('click', () => {
-        bulkPage = 1;
-        loadBulkImports();
-        loadBulkImportFilenames();
-    });
-    bulkImportForm.addEventListener('submit', handleBulkImport);
-    bulkImportFilter.addEventListener('change', () => {
-        bulkCurrentImport = bulkImportFilter.value;
-        bulkPage = 1;
-        loadBulkImports();
-    });
-    bulkDeleteBtn.addEventListener('click', handleBulkDelete);
-    bulkCancelBtn.addEventListener('click', handleBulkCancel);
-    bulkPrevPage.addEventListener('click', () => {
-        if (bulkPage > 1) {
-            bulkPage--;
-            loadBulkImports();
-        }
-    });
-    bulkNextPage.addEventListener('click', () => {
-        if (bulkPage * bulkLimit < bulkTotal) {
-            bulkPage++;
-            loadBulkImports();
-        }
-    });
-}
-
-// Bulk Sample CSV Download
-const downloadSampleCsvBtn = document.getElementById('download-sample-csv');
-let bulkTimezone = 'Asia/Kolkata';
-let bulkNow = new Date();
-function updateBulkTimezoneInfo() {
-    fetch('/api/time')
-        .then(res => res.json())
-        .then(data => {
-            bulkTimezone = data.timezone || 'Asia/Kolkata';
-            bulkNow = new Date(data.iso);
-            document.getElementById('bulk-timezone-info').textContent = `Current time: ${data.now} (${bulkTimezone})`;
-        });
-}
-const bulkTabBtn = document.getElementById('bulk-tab');
-if (bulkTabBtn) {
-    bulkTabBtn.addEventListener('click', updateBulkTimezoneInfo);
-}
-// Also update on page load if already on bulk tab
-if (document.getElementById('bulk').classList.contains('hidden') === false) {
-    updateBulkTimezoneInfo();
-}
-if (downloadSampleCsvBtn) {
-    downloadSampleCsvBtn.addEventListener('click', function() {
-        // Wait for timezone info if not loaded
-        if (!bulkTimezone || !bulkNow) updateBulkTimezoneInfo();
-        const jokes = [
-            "Why do programmers prefer dark mode? Because light attracts bugs!",
-            "Why did the computer show up at work late? It had a hard drive!",
-            "Why do Java developers wear glasses? Because they don't see sharp!"
-        ];
-        const media = [
-            // Wikimedia Commons public domain images
-            'https://upload.wikimedia.org/wikipedia/commons/4/47/PNG_transparency_demonstration_1.png',
-            'https://upload.wikimedia.org/wikipedia/commons/3/3f/Fronalpstock_big.jpg',
-            'https://upload.wikimedia.org/wikipedia/commons/6/6e/Golde33443.jpg'
-        ];
-        // Use bulkNow as base, or fallback to new Date()
-        const now = bulkNow instanceof Date ? bulkNow : new Date();
-        const base = new Date(now.getTime() + 20 * 60 * 1000); // 20 min from now
-        const datetimes = [
-            new Date(base.getTime()).toLocaleString('sv-SE', { timeZone: bulkTimezone }).replace(' ', 'T'),
-            new Date(base.getTime() + 30 * 1000).toLocaleString('sv-SE', { timeZone: bulkTimezone }).replace(' ', 'T'),
-            new Date(base.getTime() + 60 * 1000).toLocaleString('sv-SE', { timeZone: bulkTimezone }).replace(' ', 'T')
-        ];
-        let csv = 'number,message,media,send_datetime\n';
-        for (let i = 0; i < 3; i++) {
-            csv += `917972402648,"${jokes[i]}",${media[i]},${datetimes[i]}\n`;
-        }
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'sample_bulk_import.csv';
-        document.body.appendChild(a);
-        a.click();
-        setTimeout(() => {
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-        }, 100);
-    });
-}
-
 // State
 let currentStatus = 'initializing';
 let chats = [];
 let selectedChatId = null; // for chat list selection
 let selectedChatIds = [];  // for send message multi-select
-// Remove in-memory sentMessages array for Send Message tab
-// Only use backend log for sent messages
-// (No declaration or use of let sentMessages = [] for Send Message tab)
+let templates = [];
+let sendTabSelectedTemplateMediaPath = '';
+let chatTabSelectedTemplateMediaPath = '';
+
+
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -190,7 +85,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Send Message Tab: Template Integration ---
     if (templateSelect) {
-        document.getElementById('send-tab').addEventListener('click', populateTemplateSelect);
+        document.getElementById('send-tab').addEventListener('click', () => {
+            console.log('Send tab clicked, loading templates and sent messages');
+            populateTemplateSelect();
+            loadSentMessagesLog();
+        });
         templateSelect.addEventListener('change', handleTemplateSelectChange);
         previewTemplateBtn.addEventListener('click', handlePreviewTemplateBtn);
     }
@@ -201,43 +100,87 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // Load templates when chats tab is clicked
+    const chatsTab = document.getElementById('chats-tab');
+    if (chatsTab) {
+        chatsTab.addEventListener('click', () => {
+            populateChatTemplateSelect();
+        });
+    }
+
     const chatTemplateSelect = document.getElementById('chat-template-select');
 
     if (chatTemplateSelect) {
-        document.addEventListener('DOMContentLoaded', populateChatTemplateSelect);
+        populateChatTemplateSelect();
         chatTemplateSelect.addEventListener('change', handleChatTemplateSelectChange);
     }
 
     // --- Sent Messages Log for Send Message Tab ---
     if (sentMessagesTable) {
-        document.addEventListener('DOMContentLoaded', loadSentMessagesLog);
+        // Load sent messages when page loads
+        loadSentMessagesLog();
         const sendTabBtn = document.getElementById('send-tab');
         if (sendTabBtn) {
-            sendTabBtn.addEventListener('click', loadSentMessagesLog);
+            sendTabBtn.addEventListener('click', () => {
+                console.log('Send tab clicked, reloading sent messages');
+                loadSentMessagesLog();
+            });
         }
     }
 });
 
-// Setup event listeners
-function setupEventListeners() {
-    // Send message form submission
-    sendMessageForm.addEventListener('submit', handleSendMessage);
+// Global utility function for text truncation
+function toggleText(btn) {
+    const container = btn.closest('.text-truncate-container');
+    const shortText = container.querySelector('.short-text');
+    const fullText = container.querySelector('.full-text');
     
-    // Media upload preview
-    mediaUpload.addEventListener('change', handleMediaUpload);
-    // Recipient select change (for multi-select)
-    recipientSelect.addEventListener('change', handleRecipientSelectChange);
-    // Live preview for message
-    document.getElementById('message-text').addEventListener('input', renderMessagePreview);
-    document.getElementById('recipient-input').addEventListener('input', renderMessagePreview);
+    if (fullText.style.display === 'none' || !fullText.style.display) {
+        shortText.style.display = 'none';
+        fullText.style.display = 'block';
+        btn.textContent = 'show less';
+    } else {
+        shortText.style.display = 'block';
+        fullText.style.display = 'none';
+        btn.textContent = 'show more';
+    }
 }
 
-function handleRecipientSelectChange() {
-    // Get all selected options
-    selectedChatIds = Array.from(recipientSelect.selectedOptions)
-        .map(opt => opt.value)
-        .filter(v => v);
-    renderMessagePreview();
+// HTML escape utility
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Setup event listeners
+function setupEventListeners() {
+    // Setup media upload handler
+    if (mediaUpload) {
+        mediaUpload.addEventListener('change', handleMediaUpload);
+    }
+    
+    // Setup send message form
+    if (sendMessageForm) {
+        sendMessageForm.addEventListener('submit', handleSendMessage);
+    }
+    
+    // Setup recipient multi-select
+    if (recipientSelect) {
+        // Make it multi-select
+        recipientSelect.multiple = true;
+        recipientSelect.addEventListener('change', handleRecipientSelectChange);
+    }
+    
+    // Load initial data
+    loadChats();
+    loadTemplates();
+    
+    // Load templates for both tabs initially
+    setTimeout(() => {
+        populateTemplateSelect();
+        populateChatTemplateSelect();
+    }, 1000);
 }
 
 // Check WhatsApp connection status
@@ -245,9 +188,10 @@ function checkStatus() {
     fetch('/api/status')
         .then(response => response.json())
         .then(data => {
-            updateStatus(data.status);
+            currentStatus = data.status;
+            updateStatusIndicator(data.status);
             
-            if (data.qr) {
+            if (data.status === 'qr') {
                 showQRCode(data.qr);
             } else {
                 hideQRCode();
@@ -260,43 +204,54 @@ function checkStatus() {
                 if (chatList) chatList.innerHTML = '<div class="text-center text-gray-400 py-4">WhatsApp not connected. Waiting for connection...</div>';
             }
             
-            // Poll for status updates
+            // Poll for status updates every 3 seconds
             setTimeout(checkStatus, 3000);
         })
         .catch(error => {
             console.error('Error checking status:', error);
-            updateStatus('disconnected');
+            updateStatusIndicator('error');
+            // Poll again after 5 seconds on error
             setTimeout(checkStatus, 5000);
         });
 }
 
 // Update status indicator
-function updateStatus(status) {
-    currentStatus = status;
-    statusIndicator.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+function updateStatusIndicator(status) {
+    if (!statusIndicator) return;
     
-    // Update status class
-    statusIndicator.className = '';
-    if (status === 'ready') {
-        statusIndicator.classList.add('status-connected');
-    } else if (status === 'disconnected' || status === 'auth_failure') {
-        statusIndicator.classList.add('status-disconnected');
-    } else {
-        statusIndicator.classList.add('status-connecting');
-    }
+    const statusText = document.getElementById('status-text');
+    if (!statusText) return;
+    
+    const statusMap = {
+        'initializing': { text: 'Initializing...', class: 'bg-yellow-500' },
+        'qr': { text: 'Scan QR Code', class: 'bg-blue-500' },
+        'authenticated': { text: 'Connected', class: 'bg-green-500' },
+        'ready': { text: 'Ready', class: 'bg-green-500' },
+        'error': { text: 'Error', class: 'bg-red-500' },
+        'disconnected': { text: 'Disconnected', class: 'bg-red-500' }
+    };
+    
+    const statusInfo = statusMap[status] || { text: 'Unknown', class: 'bg-gray-500' };
+    statusIndicator.className = `inline-block w-3 h-3 rounded-full ${statusInfo.class}`;
+    statusText.textContent = statusInfo.text;
 }
 
 // Show QR Code
 function showQRCode(qrData) {
+    if (!qrCodeContainer || !qrData) return;
+    
     qrCodeContainer.innerHTML = '';
+    
     const qrDiv = document.createElement('div');
-    qrDiv.id = 'qrcode';
-    qrDiv.className = 'mb-3';
+    qrDiv.className = 'flex justify-center';
     qrCodeContainer.appendChild(qrDiv);
     
-    const instructions = document.createElement('p');
-    instructions.className = 'text-center mb-4';
-    instructions.innerHTML = 'Scan this QR code with your WhatsApp app to log in';
+    const instructions = document.createElement('div');
+    instructions.className = 'text-center mt-4 text-gray-600';
+    instructions.innerHTML = `
+        <p class="mb-2">Scan this QR code with WhatsApp to connect:</p>
+        <p class="text-sm">WhatsApp > Settings > Linked Devices > Link a Device</p>
+    `;
     qrCodeContainer.appendChild(instructions);
 
     // Debug: log QR code string
@@ -372,6 +327,12 @@ function populateRecipientSelect() {
     });
 }
 
+// Handle recipient select change (multi-select)
+function handleRecipientSelectChange() {
+    selectedChatIds = Array.from(recipientSelect.selectedOptions).map(option => option.value);
+    renderMessagePreview();
+}
+
 // Select chat and load messages
 function selectChat(chatId) {
     selectedChatId = chatId;
@@ -388,13 +349,34 @@ function selectChat(chatId) {
     const selectedChat = chats.find(chat => chat.id === chatId);
     if (!selectedChat) return;
     
-    // Update chat header
-    chatHeader.innerHTML = `<h5 class="mb-0">${selectedChat.name}</h5>`;
+    // Update chat header with participants button for groups
+    let headerContent = `<div class="flex items-center justify-between w-full">`;
+    headerContent += `<h5 class="mb-0">${selectedChat.name}</h5>`;
+    if (selectedChat.isGroup) {
+        headerContent += `
+            <button id="show-participants-btn" class="bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700 transition-colors duration-200 flex items-center gap-1">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z"></path>
+                </svg>
+                Show Participants
+            </button>
+        `;
+    }
+    headerContent += `</div>`;
+    chatHeader.innerHTML = headerContent;
+    
+    // Add event listener for participants button if it's a group
+    if (selectedChat.isGroup) {
+        const participantsBtn = document.getElementById('show-participants-btn');
+        if (participantsBtn) {
+            participantsBtn.addEventListener('click', () => showGroupParticipants(chatId, selectedChat.name));
+        }
+    }
     
     // Load messages
     loadMessages(chatId);
     // After selecting a chat, repopulate templates
-    if (chatTemplateSelect) populateChatTemplateSelect();
+    populateChatTemplateSelect();
 }
 
 // Load messages for a chat
@@ -649,38 +631,179 @@ function renderChatAttachmentPreview() {
     // For now, no-op
 }
 
-// Render sent messages table
-function renderSentMessages() {
-    sentMessagesTable.innerHTML = '';
-    
-    if (sentMessages.length === 0) {
-        sentMessagesTable.innerHTML = '<tr><td colspan="4" class="text-center">No messages sent yet</td></tr>';
+// State for sent messages pagination
+let sentMessagesPage = 1;
+let sentMessagesLimit = 20;
+let allSentMessages = [];
+
+// Load sent messages log (for Send Message tab)
+function loadSentMessagesLog(page = 1) {
+    if (!sentMessagesTable) {
+        console.error('sentMessagesTable element not found');
         return;
     }
     
-    sentMessages.forEach(msg => {
-        const row = document.createElement('tr');
+    sentMessagesPage = page;
+    
+    fetch('/api/messages/log')
+        .then(response => response.json())
+        .then(data => {
+            if (!Array.isArray(data)) {
+                console.error('Expected array from /api/messages/log, got:', typeof data, data);
+                return;
+            }
+            console.log('Sent messages loaded:', data.length, 'messages');
+            allSentMessages = data.reverse(); // Show newest first
+            renderSentMessagesTable();
+        })
+        .catch(error => {
+            console.error('Error loading sent messages log:', error);
+        });
+}
+
+// Render sent messages table with pagination and resend functionality
+function renderSentMessagesTable() {
+    if (!sentMessagesTable) {
+        console.error('sentMessagesTable not found in renderSentMessagesTable');
+        return;
+    }
+    
+    // sentMessagesTable IS the tbody element, no need to search for tbody within it
+    const tbody = sentMessagesTable;
+    
+    if (allSentMessages.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-gray-400 py-4">No sent messages</td></tr>';
+        updateSentMessagesPagination();
+        return;
+    }
+    
+    // Calculate pagination
+    const startIndex = (sentMessagesPage - 1) * sentMessagesLimit;
+    const endIndex = startIndex + sentMessagesLimit;
+    const pageMessages = allSentMessages.slice(startIndex, endIndex);
+    
+    console.log(`Showing messages ${startIndex + 1}-${Math.min(endIndex, allSentMessages.length)} of ${allSentMessages.length}`);
+    
+    tbody.innerHTML = pageMessages.map((msg, index) => {
+        const globalIndex = startIndex + index;
+        const hasMedia = msg.media && (msg.media.filename || msg.media.mimetype);
+        const recipient = msg.to || msg.recipient || 'Unknown';
+        const timestamp = msg.time || msg.timestamp;
         
-        // Status badge
-        let statusBadge = '';
-        if (msg.status === 'sent') {
-            statusBadge = '<span class="badge bg-success">Sent</span>';
-        } else if (msg.status === 'pending') {
-            statusBadge = '<span class="badge bg-warning text-dark">Pending</span>';
-        } else {
-            statusBadge = `<span class="badge bg-danger">Failed</span>`;
-        }
-        
-        row.innerHTML = `
-            <td>${msg.to}</td>
-            <td>${msg.message}</td>
-            <td>${statusBadge}</td>
-            <td>${new Date(msg.timestamp).toLocaleTimeString()}</td>
+        return `
+            <tr class="hover:bg-gray-50">
+                <td class="px-4 py-3 text-sm">${new Date(timestamp).toLocaleString()}</td>
+                <td class="px-4 py-3 text-sm">${escapeHtml(recipient.replace('@c.us', '').replace('@g.us', ' (Group)'))}</td>
+                <td class="px-4 py-3 text-sm max-w-xs">
+                    <div class="truncate">${escapeHtml(msg.message || '')}</div>
+                    ${hasMedia ? `<div class="text-xs text-blue-600 mt-1">📎 ${msg.media.filename || 'Media'}</div>` : ''}
+                </td>
+                <td class="px-4 py-3 text-sm text-center">${hasMedia ? 'Yes' : 'No'}</td>
+                <td class="px-4 py-3 text-sm">
+                    <span class="px-2 py-1 text-xs rounded ${msg.status === 'sent' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}">
+                        ${escapeHtml(msg.status)}
+                    </span>
+                </td>
+                <td class="px-4 py-3 text-sm">
+                    <button onclick="resendMessage(${globalIndex})" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-xs">
+                        Resend
+                    </button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+    
+    updateSentMessagesPagination();
+}
+
+// Update pagination controls for sent messages
+function updateSentMessagesPagination() {
+    const totalPages = Math.ceil(allSentMessages.length / sentMessagesLimit);
+    const container = document.getElementById('sent-messages-pagination');
+    
+    if (!container) {
+        // Create pagination container if it doesn't exist
+        const paginationHtml = `
+            <div id="sent-messages-pagination" class="flex justify-between items-center mt-4 px-4 py-3 bg-gray-50 rounded">
+                <div class="text-sm text-gray-600">
+                    Showing <span id="sent-messages-range"></span> of <span id="sent-messages-total"></span> messages
+                </div>
+                <div class="flex gap-2">
+                    <button id="sent-messages-prev" class="px-3 py-1 bg-white border rounded text-sm hover:bg-gray-50 disabled:opacity-50" onclick="loadSentMessagesLog(sentMessagesPage - 1)">
+                        Previous
+                    </button>
+                    <span id="sent-messages-page-info" class="px-3 py-1 text-sm"></span>
+                    <button id="sent-messages-next" class="px-3 py-1 bg-white border rounded text-sm hover:bg-gray-50 disabled:opacity-50" onclick="loadSentMessagesLog(sentMessagesPage + 1)">
+                        Next
+                    </button>
+                </div>
+            </div>
         `;
         
-        sentMessagesTable.appendChild(row);
+        // Insert after the sent messages table (sentMessagesTable is the tbody, so we need its parent table's parent)
+        if (sentMessagesTable && sentMessagesTable.parentNode && sentMessagesTable.parentNode.parentNode) {
+            sentMessagesTable.parentNode.parentNode.insertAdjacentHTML('afterend', paginationHtml);
+        }
+    }
+    
+    // Update pagination info
+    const startIndex = (sentMessagesPage - 1) * sentMessagesLimit + 1;
+    const endIndex = Math.min(sentMessagesPage * sentMessagesLimit, allSentMessages.length);
+    
+    const rangeElement = document.getElementById('sent-messages-range');
+    const totalElement = document.getElementById('sent-messages-total');
+    const pageInfoElement = document.getElementById('sent-messages-page-info');
+    const prevButton = document.getElementById('sent-messages-prev');
+    const nextButton = document.getElementById('sent-messages-next');
+    
+    if (rangeElement) rangeElement.textContent = `${startIndex}-${endIndex}`;
+    if (totalElement) totalElement.textContent = allSentMessages.length;
+    if (pageInfoElement) pageInfoElement.textContent = `Page ${sentMessagesPage} of ${totalPages}`;
+    
+    if (prevButton) prevButton.disabled = sentMessagesPage <= 1;
+    if (nextButton) nextButton.disabled = sentMessagesPage >= totalPages;
+}
+
+// Resend a message from the sent messages log (global function)
+window.resendMessage = function(messageIndex) {
+    const message = allSentMessages[messageIndex];
+    if (!message) {
+        alert('Message not found');
+        return;
+    }
+    
+    if (!confirm(`Resend message to ${message.to}?\n\nMessage: ${message.message}`)) {
+        return;
+    }
+    
+    const formData = new FormData();
+    formData.append('number', message.to);
+    formData.append('message', message.message || '');
+    
+    // If the message had media, we need to handle it
+    if (message.media && message.media.filename) {
+        // For resending, we'll use media_path since the file should still exist
+        formData.append('media_path', `/uploads/${message.media.filename}`);
+    }
+    
+    fetch('/api/messages/send', {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.error) {
+            throw new Error(data.error);
+        }
+        alert('Message resent successfully!');
+        // Reload the sent messages log to show the new entry
+        loadSentMessagesLog(1); // Go to first page to see the latest message
+    })
+    .catch(error => {
+        console.error('Resend error:', error);
+        alert('Failed to resend message: ' + error.message);
     });
-} 
+};
 
 // --- Templates Tab Logic ---
 function loadTemplates() {
@@ -730,10 +853,16 @@ function renderTemplatesList() {
 }
 
 function renderTemplateMediaThumb(media) {
-    if (media.match(/\.(jpg|jpeg|png|gif|webp)$/i) || media.startsWith('http')) {
-        return `<img src="${escapeHtml(media)}" class="w-16 h-16 object-cover rounded ml-2" alt="media">`;
+    if (!media) return '';
+    const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(media);
+    const isVideo = /\.(mp4|avi|mov|webm)$/i.test(media);
+    if (isImage) {
+        return `<img src='${media}' class='w-12 h-12 object-cover rounded' alt='Thumbnail'>`;
+    } else if (isVideo) {
+        return `<div class='w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xs'>Video</div>`;
+    } else {
+        return `<div class='w-12 h-12 bg-gray-200 rounded flex items-center justify-center text-xs'>File</div>`;
     }
-    return '';
 }
 
 function openTemplateModal(id = null) {
@@ -763,6 +892,7 @@ function openTemplateModal(id = null) {
         currentTemplateMediaPath = '';
     }
 }
+
 function closeTemplateModalFn() {
     templateModal.classList.add('hidden');
 }
@@ -804,44 +934,97 @@ function handleTemplateFormSubmit(e) {
         });
     }
 }
+
 function deleteTemplate(id) {
-    if (!confirm('Delete this template?')) return;
+    if (!confirm('Are you sure you want to delete this template?')) return;
     fetch(`/api/templates/${id}`, { method: 'DELETE' })
-        .then(res => res.json())
         .then(() => loadTemplates());
 }
+
 function previewTemplate(id) {
     const t = templates.find(t => t.id === id);
     if (!t) return;
-    templatePreviewModal.classList.remove('hidden');
     templatePreviewContent.innerHTML = renderTemplatePreview(t);
+    templatePreviewModal.classList.remove('hidden');
 }
+
+function renderTemplatePreview(template) {
+    let html = `<h3 class='font-semibold mb-2'>${escapeHtml(template.name)}</h3>`;
+    if (template.media) {
+        const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(template.media);
+        const isVideo = /\.(mp4|avi|mov|webm)$/i.test(template.media);
+        if (isImage) {
+            html += `<img src='${template.media}' class='max-w-full mb-3 rounded' alt='Preview'>`;
+        } else if (isVideo) {
+            html += `<video src='${template.media}' class='max-w-full mb-3 rounded' controls></video>`;
+        } else {
+            html += `<a href='${template.media}' target='_blank' class='text-blue-600 underline mb-3 block'>Download File</a>`;
+        }
+    }
+    html += `<div class='whitespace-pre-line'>${escapeHtml(template.text)}</div>`;
+    return html;
+}
+
 function closeTemplatePreviewFn() {
     templatePreviewModal.classList.add('hidden');
 }
-function renderTemplatePreview(t) {
-    // WhatsApp-style preview
-    return `
-      <div class="bg-gray-100 rounded-lg p-4 flex flex-col gap-2">
-        <div class="flex items-center gap-2 mb-2">
-          <div class="w-8 h-8 rounded-full bg-green-600 flex items-center justify-center text-white font-bold">T</div>
-          <div class="font-semibold">${escapeHtml(t.name)}</div>
-        </div>
-        <div class="bg-white rounded-lg p-3 shadow text-gray-800 whitespace-pre-line">${escapeHtml(t.text)}</div>
-        ${t.media ? `<img src="${escapeHtml(t.media)}" class="rounded-lg max-h-48 mt-2" alt="media">` : ''}
-      </div>
-    `;
-}
-function escapeHtml(str) {
-    return String(str).replace(/[&<>'"]/g, function (c) {
-        return {'&':'&amp;','<':'&lt;','>':'&gt;','\'':'&#39;','"':'&quot;'}[c];
-    });
-} 
 
+function showTemplateMediaPreview(mediaPath) {
+    if (!mediaPath) return;
+    const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(mediaPath);
+    const isVideo = /\.(mp4|avi|mov|webm)$/i.test(mediaPath);
+    if (isImage) {
+        templateMediaPreview.innerHTML = `<img src='${mediaPath}' class='max-w-32 max-h-32 object-cover rounded' alt='Current'>`;
+    } else if (isVideo) {
+        templateMediaPreview.innerHTML = `<video src='${mediaPath}' class='max-w-32 max-h-32 object-cover rounded' muted></video>`;
+    } else {
+        templateMediaPreview.innerHTML = `<div class='p-2 bg-gray-100 rounded text-sm'>File: ${mediaPath.split('/').pop()}</div>`;
+    }
+}
+
+// Template media file input change handler
+if (templateMediaFileInput) {
+    templateMediaFileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            const url = URL.createObjectURL(file);
+            if (file.type.startsWith('image/')) {
+                templateMediaPreview.innerHTML = `<img src='${url}' class='max-w-32 max-h-32 object-cover rounded' alt='Preview'>`;
+            } else if (file.type.startsWith('video/')) {
+                templateMediaPreview.innerHTML = `<video src='${url}' class='max-w-32 max-h-32 object-cover rounded' muted></video>`;
+            } else {
+                templateMediaPreview.innerHTML = `<div class='p-2 bg-gray-100 rounded text-sm'>File: ${file.name}</div>`;
+            }
+            removeTemplateMediaBtn.classList.remove('hidden');
+            templateMediaToRemove = false;
+        }
+    });
+}
+
+// Remove template media button handler
+if (removeTemplateMediaBtn) {
+    removeTemplateMediaBtn.addEventListener('click', () => {
+        templateMediaFileInput.value = '';
+        templateMediaPreview.innerHTML = '';
+        removeTemplateMediaBtn.classList.add('hidden');
+        if (currentTemplateMediaPath) {
+            templateMediaToRemove = true;
+        }
+    });
+}
+
+// --- Send Message Tab: Template Integration ---
 function populateTemplateSelect() {
+    console.log('populateTemplateSelect called for Send Message tab');
+    if (!templateSelect) {
+        console.warn('template-select element not found');
+        return;
+    }
+    
     fetch('/api/templates')
         .then(res => res.json())
         .then(data => {
+            console.log('Templates loaded for send message tab:', data);
             // Save for preview
             window.sendTabTemplates = data;
             templateSelect.innerHTML = '<option value="">-- None --</option>';
@@ -852,6 +1035,9 @@ function populateTemplateSelect() {
                 templateSelect.appendChild(opt);
             });
             previewTemplateBtn.classList.add('hidden');
+        })
+        .catch(err => {
+            console.error('Failed to load templates for send message tab:', err);
         });
 }
 
@@ -890,152 +1076,48 @@ function handlePreviewTemplateBtn() {
     }
 }
 
-function renderMessagePreviewWithMediaUrl(mediaUrl) {
-    const previewArea = document.getElementById('message-preview-area');
-    const messageText = document.getElementById('message-text').value;
-    let html = '';
-    if (mediaUrl) {
-        html += `<img src='${mediaUrl}' class='media-preview mb-2' alt='Preview'>`;
+function showSendTabMediaPreview(mediaPath) {
+    // Simulate file attachment preview for template media
+    if (!mediaPreviewContainer) return;
+    mediaPreviewContainer.classList.remove('d-none');
+    imagePreview.classList.add('d-none');
+    videoPreview.classList.add('d-none');
+    filePreview.classList.add('d-none');
+    
+    const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(mediaPath);
+    const isVideo = /\.(mp4|avi|mov|webm)$/i.test(mediaPath);
+    
+    if (isImage) {
+        imagePreview.src = mediaPath;
+        imagePreview.classList.remove('d-none');
+    } else if (isVideo) {
+        videoPreview.src = mediaPath;
+        videoPreview.classList.remove('d-none');
+    } else {
+        fileName.textContent = mediaPath.split('/').pop();
+        filePreview.classList.remove('d-none');
     }
-    if (messageText) {
-        html += `<div class='border rounded p-2'>${escapeHtml(messageText).replace(/\n/g, '<br>')}</div>`;
+}
+
+function clearSendTabMediaPreview() {
+    if (mediaPreviewContainer) {
+        mediaPreviewContainer.classList.add('d-none');
     }
-    previewArea.innerHTML = html || '<div class="text-muted">Message preview will appear here</div>';
-} 
-
-function handleBulkImport(e) {
-    e.preventDefault();
-    bulkImportErrors.textContent = '';
-    const file = bulkCsvInput.files[0];
-    if (!file) return;
-    const formData = new FormData();
-    formData.append('csv', file);
-    fetch('/api/bulk/import', {
-        method: 'POST',
-        body: formData
-    })
-    .then(res => res.json())
-    .then(data => {
-        if (data.errors > 0) {
-            bulkImportErrors.textContent = `${data.errors} record(s) were not imported due to missing or invalid fields.`;
-        } else {
-            bulkImportErrors.textContent = '';
-        }
-        bulkCsvInput.value = '';
-        loadBulkImports();
-        loadBulkImportFilenames();
-    })
-    .catch(err => {
-        bulkImportErrors.textContent = 'Import failed: ' + err.message;
-    });
 }
 
-function loadBulkImports() {
-    let url = `/api/bulk?page=${bulkPage}&limit=${bulkLimit}`;
-    if (bulkCurrentImport) url += `&import_filename=${encodeURIComponent(bulkCurrentImport)}`;
-    fetch(url)
-        .then(res => res.json())
-        .then(data => {
-            bulkRecords = data.records;
-            bulkTotal = data.total;
-            renderBulkList();
-        });
-}
-
-function renderBulkList() {
-    if (!bulkList) return;
-    if (!bulkRecords || bulkRecords.length === 0) {
-        bulkList.innerHTML = '<tr><td colspan="9" class="text-center text-gray-400 py-4">No records found.</td></tr>';
-        bulkPageInfo.textContent = '';
-        return;
-    }
-    bulkList.innerHTML = '';
-    bulkRecords.forEach((r, i) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td class="px-2 py-1 text-xs">${(bulkPage - 1) * bulkLimit + i + 1}</td>
-            <td class="px-2 py-1 text-xs">${escapeHtml(r.number)}</td>
-            <td class="px-2 py-1 text-xs truncate max-w-xs" title="${escapeHtml(r.message)}">${escapeHtml(r.message).slice(0, 80)}${r.message.length > 80 ? '…' : ''}</td>
-            <td class="px-2 py-1 text-xs">${r.media ? `<a href='${escapeHtml(r.media)}' target='_blank' class='text-green-600 underline'>Media</a>` : ''}</td>
-            <td class="px-2 py-1 text-xs">${escapeHtml(r.send_datetime)}</td>
-            <td class="px-2 py-1 text-xs">${escapeHtml(r.import_filename)}</td>
-            <td class="px-2 py-1 text-xs">${renderBulkStatus(r.status)}</td>
-            <td class="px-2 py-1 text-xs">${escapeHtml(r.sent_datetime || '')}</td>
-            <td class="px-2 py-1 text-xs">
-                <button class="test-bulk-btn bg-blue-600 text-white px-2 py-1 rounded text-xs" data-uid="${r.unique_id}">Test</button>
-            </td>
-        `;
-        bulkList.appendChild(tr);
-    });
-    const start = (bulkPage - 1) * bulkLimit + 1;
-    const end = Math.min(bulkPage * bulkLimit, bulkTotal);
-    bulkPageInfo.textContent = `Showing ${start}-${end} of ${bulkTotal}`;
-    // Add event listeners for Test buttons
-    bulkList.querySelectorAll('.test-bulk-btn').forEach(btn => {
-        btn.addEventListener('click', function(e) {
-            e.stopPropagation();
-            const uid = this.getAttribute('data-uid');
-            showBulkTestOptions(this, uid);
-        });
-    });
-}
-
-function renderBulkStatus(status) {
-    if (status === 'pending') return '<span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs">Pending</span>';
-    if (status === 'sent') return '<span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs">Sent</span>';
-    if (status === 'canceled') return '<span class="bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs">Canceled</span>';
-    return escapeHtml(status);
-}
-
-function loadBulkImportFilenames() {
-    fetch('/api/bulk?page=1&limit=10000')
-        .then(res => res.json())
-        .then(data => {
-            const filenames = Array.from(new Set(data.records.map(r => r.import_filename)));
-            bulkImportFilter.innerHTML = '<option value="">-- All --</option>';
-            filenames.forEach(f => {
-                const opt = document.createElement('option');
-                opt.value = f;
-                opt.textContent = f;
-                bulkImportFilter.appendChild(opt);
-            });
-        });
-}
-
-function handleBulkDelete() {
-    const filename = bulkImportFilter.value;
-    if (!filename) return alert('Select an import filename to delete.');
-    if (!confirm('Delete all records for this import?')) return;
-    fetch(`/api/bulk/${encodeURIComponent(filename)}`, { method: 'DELETE' })
-        .then(res => res.json())
-        .then(() => {
-            loadBulkImports();
-            loadBulkImportFilenames();
-        });
-}
-
-function handleBulkCancel() {
-    const filename = bulkImportFilter.value;
-    if (!filename) return alert('Select an import filename to cancel.');
-    if (!confirm('Cancel all pending records for this import?')) return;
-    fetch(`/api/bulk/cancel/${encodeURIComponent(filename)}`, { method: 'POST' })
-        .then(res => res.json())
-        .then(() => {
-            loadBulkImports();
-            loadBulkImportFilenames();
-        });
-} 
-
+// --- Chat Tab Template Integration ---
 function populateChatTemplateSelect() {
-    console.log('[DEBUG] populateChatTemplateSelect called');
+    const chatTemplateSelect = document.getElementById('chat-template-select');
+    console.log('populateChatTemplateSelect called, element found:', !!chatTemplateSelect);
     if (!chatTemplateSelect) {
-        console.warn('[DEBUG] chatTemplateSelect element not found');
+        console.warn('chat-template-select element not found');
         return;
     }
+    
     fetch('/api/templates')
         .then(res => res.json())
         .then(data => {
-            console.log('[DEBUG] Templates fetched for chat:', data);
+            console.log('Templates loaded for chat tab:', data);
             chatTemplateSelect.innerHTML = '<option value="">-- Template --</option>';
             data.forEach(t => {
                 const opt = document.createElement('option');
@@ -1044,10 +1126,14 @@ function populateChatTemplateSelect() {
                 chatTemplateSelect.appendChild(opt);
             });
             window.chatTabTemplates = data;
+        })
+        .catch(err => {
+            console.error('Failed to load templates for chat tab:', err);
         });
 }
 
 function handleChatTemplateSelectChange() {
+    const chatTemplateSelect = document.getElementById('chat-template-select');
     const id = chatTemplateSelect.value;
     const templates = window.chatTabTemplates || [];
     const t = templates.find(t => t.id === id);
@@ -1068,280 +1154,169 @@ function handleChatTemplateSelectChange() {
 }
 
 function showChatTabMediaPreview(mediaPath) {
-    // Use the same logic as showSendTabMediaPreview
-    const container = document.getElementById('media-preview-container');
-    const img = document.getElementById('image-preview');
-    const vid = document.getElementById('video-preview');
-    const fileDiv = document.getElementById('file-preview');
-    const fileName = document.getElementById('file-name');
-    container.classList.remove('d-none');
-    img.classList.add('d-none');
-    vid.classList.add('d-none');
-    fileDiv.classList.add('d-none');
-    if (mediaPath.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-        img.src = mediaPath;
-        img.classList.remove('d-none');
-    } else if (mediaPath.match(/\.(mp4|webm|ogg)$/i)) {
-        vid.src = mediaPath;
-        vid.classList.remove('d-none');
-    } else if (mediaPath.match(/\.pdf$/i)) {
-        fileDiv.classList.remove('d-none');
-        fileName.textContent = mediaPath.split('/').pop();
-    }
+    // For chat tab, we might not have a dedicated preview area
+    // This is a placeholder for future enhancement
+    console.log('Chat template media preview:', mediaPath);
 }
+
 function clearChatTabMediaPreview() {
-    const container = document.getElementById('media-preview-container');
-    const img = document.getElementById('image-preview');
-    const vid = document.getElementById('video-preview');
-    const fileDiv = document.getElementById('file-preview');
-    const fileName = document.getElementById('file-name');
-    img.src = '';
-    vid.src = '';
-    fileName.textContent = '';
-    img.classList.add('d-none');
-    vid.classList.add('d-none');
-    fileDiv.classList.add('d-none');
-    container.classList.add('d-none');
-} 
-
-// --- Sent Messages Log Pagination ---
-let sentMessagesPage = 1;
-const sentMessagesPerPage = 100;
-
-function loadSentMessagesLog() {
-    fetch('/api/sent-messages')
-        .then(res => res.json())
-        .then(data => renderSentMessagesLog(data));
+    console.log('Clear chat template media preview');
 }
 
-function renderSentMessagesLog(logs) {
-    if (!sentMessagesTable) return;
-    if (!logs || logs.length === 0) {
-        sentMessagesTable.innerHTML = '<tr><td colspan="5" class="text-center text-gray-400">No sent messages yet.</td></tr>';
-        renderSentMessagesPagination(0, 0);
-        return;
-    }
-    const start = (sentMessagesPage - 1) * sentMessagesPerPage;
-    const end = Math.min(start + sentMessagesPerPage, logs.length);
-    const pageLogs = logs.slice(start, end);
-    sentMessagesTable.innerHTML = '';
-    pageLogs.forEach((msg, i) => {
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td><a href="#" class="text-green-700 hover:underline" data-phone="${escapeHtml(msg.to)}">${escapeHtml(msg.to)}</a></td>
-            <td>${escapeHtml(msg.message)}</td>
-            <td>${msg.status === 'sent' ? '<span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs">Sent</span>' : escapeHtml(msg.status)}</td>
-            <td>${msg.time ? new Date(msg.time).toLocaleString() : ''}</td>
-            <td><button class="resend-btn text-blue-600 hover:underline text-xs" data-index="${start + i}">Resend</button></td>
+// Group Participants Functions
+function showGroupParticipants(chatId, groupName) {
+    // Create modal if it doesn't exist
+    let participantsModal = document.getElementById('participants-modal');
+    if (!participantsModal) {
+        participantsModal = document.createElement('div');
+        participantsModal.id = 'participants-modal';
+        participantsModal.className = 'fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden';
+        participantsModal.innerHTML = `
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-5xl p-6 relative max-h-[90vh] overflow-hidden">
+                <button id="close-participants-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-700 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors">&times;</button>
+                <h3 id="participants-modal-title" class="text-xl font-semibold mb-6 text-gray-800 border-b pb-3">Group Participants</h3>
+                <div id="participants-content" class="overflow-y-auto max-h-[calc(90vh-120px)]">
+                    <div class="text-center py-8">
+                        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                        <p class="mt-3 text-gray-600">Loading participants...</p>
+                    </div>
+                </div>
+            </div>
         `;
-        sentMessagesTable.appendChild(tr);
-    });
-    // Add click handlers for resend and recipient
-    sentMessagesTable.querySelectorAll('.resend-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const idx = this.getAttribute('data-index');
-            fetch('/api/sent-messages')
-                .then(res => res.json())
-                .then(logs => resendSentMessage(logs[idx]));
+        document.body.appendChild(participantsModal);
+        
+        // Add close event listener
+        document.getElementById('close-participants-modal').addEventListener('click', () => {
+            participantsModal.classList.add('hidden');
         });
-    });
-    sentMessagesTable.querySelectorAll('a[data-phone]').forEach(link => {
-        link.addEventListener('click', function(e) {
-            e.preventDefault();
-            const phone = this.getAttribute('data-phone');
-            const input = document.getElementById('recipient-input');
-            let nums = input.value.split(',').map(s => s.trim()).filter(Boolean);
-            if (!nums.includes(phone)) nums.push(phone);
-            input.value = nums.join(', ');
+        
+        // Close modal when clicking outside
+        participantsModal.addEventListener('click', (e) => {
+            if (e.target === participantsModal) {
+                participantsModal.classList.add('hidden');
+            }
         });
-    });
-    renderSentMessagesPagination(logs.length, sentMessagesPage);
-}
-
-function renderSentMessagesPagination(total, page) {
-    let pagination = document.getElementById('sent-messages-pagination');
-    if (!pagination) {
-        pagination = document.createElement('div');
-        pagination.id = 'sent-messages-pagination';
-        pagination.className = 'flex justify-between items-center mt-2';
-        sentMessagesTable.parentElement.appendChild(pagination);
     }
-    if (total <= sentMessagesPerPage) {
-        pagination.innerHTML = '';
-        return;
-    }
-    const totalPages = Math.ceil(total / sentMessagesPerPage);
-    pagination.innerHTML = `
-        <button id="sent-messages-prev" class="px-2 py-1 border rounded text-xs" ${page === 1 ? 'disabled' : ''}>Prev</button>
-        <span class="text-xs">Page ${page} of ${totalPages}</span>
-        <button id="sent-messages-next" class="px-2 py-1 border rounded text-xs" ${page === totalPages ? 'disabled' : ''}>Next</button>
-    `;
-    document.getElementById('sent-messages-prev').onclick = () => {
-        if (sentMessagesPage > 1) {
-            sentMessagesPage--;
-            loadSentMessagesLog();
-        }
-    };
-    document.getElementById('sent-messages-next').onclick = () => {
-        if (sentMessagesPage < totalPages) {
-            sentMessagesPage++;
-            loadSentMessagesLog();
-        }
-    };
-}
-
-// --- Fix Chat Template Dropdown ---
-function robustPopulateChatTemplateSelect(attempt = 0) {
-    const maxAttempts = 5;
-    const delay = 100;
-    const el = document.getElementById('chat-template-select');
-    if (!el) {
-        if (attempt < maxAttempts) {
-            setTimeout(() => robustPopulateChatTemplateSelect(attempt + 1), delay);
-        } else {
-            console.warn('[DEBUG] chat-template-select not found after retries');
-        }
-        return;
-    }
-    fetch('/api/templates')
-        .then(res => res.json())
+    
+    // Show modal and load participants
+    participantsModal.classList.remove('hidden');
+    document.getElementById('participants-modal-title').textContent = `Participants - ${groupName}`;
+    
+    // Load participants data
+    fetch(`/api/chats/${chatId}/participants`)
+        .then(response => response.json())
         .then(data => {
-            el.innerHTML = '<option value="">-- Template --</option>';
-            data.forEach(t => {
-                const opt = document.createElement('option');
-                opt.value = t.id;
-                opt.textContent = t.name;
-                el.appendChild(opt);
-            });
-            window.chatTabTemplates = data;
+            if (data.error) {
+                throw new Error(data.error);
+            }
+            renderParticipantsTable(data);
+        })
+        .catch(error => {
+            console.error('Error loading participants:', error);
+            document.getElementById('participants-content').innerHTML = `
+                <div class="text-center py-4 text-danger">
+                    <p>Error loading participants: ${error.message}</p>
+                </div>
+            `;
         });
 }
-// On DOMContentLoaded, on Chats tab click, and after chat select
-if (document.getElementById('chats-tab')) {
-    document.addEventListener('DOMContentLoaded', () => robustPopulateChatTemplateSelect());
-    document.getElementById('chats-tab').addEventListener('click', () => robustPopulateChatTemplateSelect());
-}
-const originalSelectChat = selectChat;
-selectChat = function(chatId) {
-    originalSelectChat.apply(this, arguments);
-    robustPopulateChatTemplateSelect();
-};
 
-function resendSentMessage(msg) {
-    // Reuse the send message API
-    const formData = new FormData();
-    formData.append('number', msg.to);
-    formData.append('message', msg.message);
-    // Media resend not supported in this UI (could be added)
-    fetch('/api/messages/send', {
-        method: 'POST',
-        body: formData
-    })
-    .then(res => res.json())
-    .then(() => loadSentMessagesLog());
-} 
-
-// Unified preview logic for both template and send message media
-function showTemplateMediaPreview(mediaPath) {
-    templateMediaPreview.innerHTML = '';
-    if (!mediaPath) return;
-    if (mediaPath.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-        templateMediaPreview.innerHTML = `<img src="${mediaPath}" class="w-32 h-32 object-contain rounded border mx-auto" alt="media">`;
-    } else if (mediaPath.match(/\.(mp4|webm|ogg)$/i)) {
-        templateMediaPreview.innerHTML = `<video src="${mediaPath}" class="w-32 h-32 object-contain rounded border mx-auto" controls></video>`;
-    } else if (mediaPath.match(/\.pdf$/i)) {
-        templateMediaPreview.innerHTML = `<a href="${mediaPath}" target="_blank" class="text-green-700 underline">View PDF</a>`;
+function renderParticipantsTable(data) {
+    const { participants, total, groupName } = data;
+    const contentDiv = document.getElementById('participants-content');
+    
+    if (participants.length === 0) {
+        contentDiv.innerHTML = '<div class="text-center py-4 text-gray-400">No participants found</div>';
+        return;
     }
-}
-function showSendTabMediaPreview(mediaPath) {
-    const container = document.getElementById('media-preview-container');
-    const img = document.getElementById('image-preview');
-    const vid = document.getElementById('video-preview');
-    const fileDiv = document.getElementById('file-preview');
-    const fileName = document.getElementById('file-name');
-    container.classList.remove('d-none');
-    img.classList.add('d-none');
-    vid.classList.add('d-none');
-    fileDiv.classList.add('d-none');
-    if (mediaPath.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
-        img.src = mediaPath;
-        img.classList.remove('d-none');
-    } else if (mediaPath.match(/\.(mp4|webm|ogg)$/i)) {
-        vid.src = mediaPath;
-        vid.classList.remove('d-none');
-    } else if (mediaPath.match(/\.pdf$/i)) {
-        fileDiv.classList.remove('d-none');
-        fileName.textContent = mediaPath.split('/').pop();
-    }
-}
-function clearSendTabMediaPreview() {
-    const container = document.getElementById('media-preview-container');
-    const img = document.getElementById('image-preview');
-    const vid = document.getElementById('video-preview');
-    const fileDiv = document.getElementById('file-preview');
-    const fileName = document.getElementById('file-name');
-    img.src = '';
-    vid.src = '';
-    fileName.textContent = '';
-    img.classList.add('d-none');
-    vid.classList.add('d-none');
-    fileDiv.classList.add('d-none');
-    container.classList.add('d-none');
-} 
-
-// Modal/dropdown for Test options
-let bulkTestDropdown;
-function showBulkTestOptions(btn, uid) {
-    if (bulkTestDropdown) bulkTestDropdown.remove();
-    bulkTestDropdown = document.createElement('div');
-    bulkTestDropdown.className = 'absolute z-50 bg-white border rounded shadow p-2 flex flex-col gap-1';
-    bulkTestDropdown.style.minWidth = '120px';
-    // Find the record to check status
-    const record = bulkRecords.find(r => r.unique_id === uid);
-    const isSent = record && record.status === 'sent';
-    bulkTestDropdown.innerHTML = `
-        <button class="send-now-btn text-green-700 hover:underline text-xs py-1" ${isSent ? 'disabled' : ''}>Send Now</button>
-        <button class="send-in-1min-btn text-blue-700 hover:underline text-xs py-1">Send in 1 min</button>
-        <button class="close-bulk-test-btn text-gray-500 hover:underline text-xs py-1">Cancel</button>
+    
+    const tableHtml = `
+        <div class="mb-4">
+            <div class="flex items-center justify-between mb-4">
+                <div class="text-lg font-semibold text-gray-800">Total Participants: ${total}</div>
+                <button id="download-csv-btn" class="bg-green-600 text-white px-4 py-2 rounded text-sm hover:bg-green-700 transition-colors duration-200 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    Download CSV
+                </button>
+            </div>
+            <div class="overflow-x-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full bg-white text-sm">
+                    <thead class="bg-gray-50 border-b border-gray-200">
+                        <tr>
+                            <th class="px-6 py-4 text-left font-semibold text-gray-700 uppercase tracking-wider">#</th>
+                            <th class="px-6 py-4 text-left font-semibold text-gray-700 uppercase tracking-wider">Group Name</th>
+                            <th class="px-6 py-4 text-left font-semibold text-gray-700 uppercase tracking-wider">Phone Number</th>
+                            <th class="px-6 py-4 text-left font-semibold text-gray-700 uppercase tracking-wider">Role</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-200">
+                        ${participants.map((participant, index) => {
+                            let role = 'Member';
+                            if (participant.isSuperAdmin) role = 'Super Admin';
+                            else if (participant.isAdmin) role = 'Admin';
+                            
+                            return `
+                                <tr class="hover:bg-gray-50 transition-colors duration-150">
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${index + 1}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">${escapeHtml(groupName)}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-600">${escapeHtml(participant.number)}</td>
+                                    <td class="px-6 py-4 whitespace-nowrap">
+                                        <span class="inline-flex px-3 py-1 text-xs font-semibold rounded-full ${
+                                            participant.isSuperAdmin ? 'bg-red-100 text-red-800' :
+                                            participant.isAdmin ? 'bg-yellow-100 text-yellow-800' :
+                                            'bg-gray-100 text-gray-800'
+                                        }">
+                                            ${role}
+                                        </span>
+                                    </td>
+                                </tr>
+                            `;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>
     `;
-    document.body.appendChild(bulkTestDropdown);
-    const rect = btn.getBoundingClientRect();
-    bulkTestDropdown.style.left = `${rect.left + window.scrollX}px`;
-    bulkTestDropdown.style.top = `${rect.bottom + window.scrollY}px`;
-    // Handlers
-    bulkTestDropdown.querySelector('.send-now-btn').onclick = () => {
-        if (isSent) {
-            alert('Already sent. Please reschedule to test again.');
-            bulkTestDropdown.remove();
-            return;
-        }
-        fetch(`/api/bulk/send-now/${uid}`, { method: 'POST' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) alert('Error: ' + data.error);
-                else alert('Message sent immediately.');
-                loadBulkImports();
-            });
-        bulkTestDropdown.remove();
-    };
-    bulkTestDropdown.querySelector('.send-in-1min-btn').onclick = () => {
-        fetch(`/api/bulk/schedule/${uid}`, { method: 'POST' })
-            .then(res => res.json())
-            .then(data => {
-                if (data.error) alert('Error: ' + data.error);
-                else alert('Message scheduled for 1 min from now.');
-                loadBulkImports();
-            });
-        bulkTestDropdown.remove();
-    };
-    bulkTestDropdown.querySelector('.close-bulk-test-btn').onclick = () => {
-        bulkTestDropdown.remove();
-    };
-    // Remove dropdown if clicking elsewhere
-    setTimeout(() => {
-        document.addEventListener('click', closeBulkTestDropdown, { once: true });
-    }, 10);
+    
+    contentDiv.innerHTML = tableHtml;
+    
+    // Add event listener for CSV download
+    const downloadBtn = document.getElementById('download-csv-btn');
+    if (downloadBtn) {
+        downloadBtn.addEventListener('click', () => downloadParticipantsCSV(data));
+    }
 }
-function closeBulkTestDropdown(e) {
-    if (bulkTestDropdown) bulkTestDropdown.remove();
-} 
+
+function downloadParticipantsCSV(data) {
+    const { participants, groupName } = data;
+    
+    // Create CSV content
+    const csvContent = [
+        ['Group Name', 'Phone Number', 'Role'],
+        ...participants.map(participant => {
+            let role = 'Member';
+            if (participant.isSuperAdmin) role = 'Super Admin';
+            else if (participant.isAdmin) role = 'Admin';
+            
+            return [
+                groupName,
+                participant.number,
+                role
+            ];
+        })
+    ].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+    
+    // Create and download file
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    link.setAttribute('href', url);
+    link.setAttribute('download', `${groupName.replace(/[^a-zA-Z0-9]/g, '_')}_participants.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+}
+

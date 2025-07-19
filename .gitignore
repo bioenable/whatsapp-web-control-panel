@@ -78,3 +78,23 @@ typings/
 # IDE's
 .idea
 .vscode
+
+# Application JSON files (exclude all JSON except package.json)
+*.json
+!package.json
+
+# Application data files
+templates.json
+bulk_messages.json
+sent_messages.json
+automations.json
+detected_channels.json
+automation_log_*.json
+
+# Sample files
+sample_bulk_import*.csv
+
+# Backup files
+*.backup
+*.bak
+*~

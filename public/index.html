@@ -27,8 +27,9 @@
                 <svg class="w-7 h-7 mr-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.72 11.06a4.5 4.5 0 01-6.36 6.36l-2.12-2.12a4.5 4.5 0 016.36-6.36l2.12 2.12z"></path></svg>
                 WhatsApp Web Control
             </a>
-            <div id="status-indicator" class="px-3 py-1 rounded-full text-sm font-semibold bg-yellow-400 text-black">
-                Connecting...
+            <div class="flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold bg-yellow-400 text-black">
+                <div id="status-indicator" class="inline-block w-3 h-3 rounded-full bg-yellow-500"></div>
+                <span id="status-text">Connecting...</span>
             </div>
         </div>
     </nav>
@@ -56,6 +57,21 @@
                 <li class="-mb-px mr-2">
                     <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="bulk-tab" data-tab="bulk" type="button" role="tab" aria-controls="bulk" aria-selected="false">
                         Bulk
+                    </button>
+                </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="contacts-tab" data-tab="contacts" type="button" role="tab" aria-controls="contacts" aria-selected="false">
+                        Contacts
+                    </button>
+                </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="channels-tab" data-tab="channels" type="button" role="tab" aria-controls="channels" aria-selected="false">
+                        Channels
+                    </button>
+                </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="automate-tab" data-tab="automate" type="button" role="tab" aria-controls="automate" aria-selected="false">
+                        Automate
                     </button>
                 </li>
             </ul>
@@ -99,6 +115,7 @@
                             <label for="recipient-input" class="block text-sm font-medium mb-1">Or Enter Phone Numbers (comma separated)</label>
                             <input type="text" class="w-full border rounded px-3 py-2" id="recipient-input" placeholder="e.g. 919876543210, 918123456789">
                         </div>
+                        <div id="recipient-list-display" class="mb-2 text-xs text-gray-700 bg-gray-50 border rounded p-2"></div>
                         <div class="mb-3 flex items-center gap-2">
                             <label for="template-select" class="block text-sm font-medium mb-1">Use Template</label>
                             <select id="template-select" class="border rounded px-2 py-1">
@@ -127,9 +144,12 @@
                         <div id="message-preview-area" class="mb-4">
                             <!-- Live message preview will be rendered here by JS -->
                         </div>
-                        <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700" id="send-btn">
-                            Send Message
-                        </button>
+                        <div class="flex items-center gap-4">
+                            <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700" id="send-btn">
+                                Send Message
+                            </button>
+                            <span id="recipient-count-display" class="text-sm font-semibold text-gray-700"></span>
+                        </div>
                     </form>
                     <div class="card mt-4">
                         <div class="card-header bg-light">
@@ -138,13 +158,14 @@
                         <div class="card-body">
                             <div class="overflow-x-auto">
                                 <table class="min-w-full bg-white rounded shadow text-sm">
-                                    <thead>
+                                    <thead class="bg-gray-50">
                                         <tr>
-                                            <th class="px-2 py-1 text-left font-semibold">Recipient</th>
-                                            <th class="px-2 py-1 text-left font-semibold">Message</th>
-                                            <th class="px-2 py-1 text-left font-semibold">Status</th>
-                                            <th class="px-2 py-1 text-left font-semibold">Time</th>
-                                            <th class="px-2 py-1 text-left font-semibold">Actions</th>
+                                            <th class="px-4 py-3 text-left font-semibold text-gray-700">Time</th>
+                                            <th class="px-4 py-3 text-left font-semibold text-gray-700">Recipient</th>
+                                            <th class="px-4 py-3 text-left font-semibold text-gray-700">Message</th>
+                                            <th class="px-4 py-3 text-center font-semibold text-gray-700">Media</th>
+                                            <th class="px-4 py-3 text-left font-semibold text-gray-700">Status</th>
+                                            <th class="px-4 py-3 text-left font-semibold text-gray-700">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody id="sent-messages">
@@ -152,6 +173,8 @@
                                     </tbody>
                                 </table>
                             </div>
+                            <!-- Pagination will be inserted here by JavaScript -->
+                            <div class="mt-6 mb-8"></div>
                         </div>
                     </div>
                 </div>
@@ -208,10 +231,13 @@
                     </div>
                     <div class="flex justify-between items-center mb-4">
                         <h2 class="text-xl font-semibold">Bulk Messaging</h2>
-                        <form id="bulk-import-form" class="flex items-center gap-2" enctype="multipart/form-data">
-                            <input type="file" id="bulk-csv" accept=".csv" class="border rounded px-2 py-1" required>
-                            <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Import CSV</button>
-                        </form>
+                        <div class="flex items-center gap-2">
+                            <button id="bulk-form-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Create Bulk Schedule</button>
+                            <form id="bulk-import-form" class="flex items-center gap-2" enctype="multipart/form-data">
+                                <input type="file" id="bulk-csv" accept=".csv" class="border rounded px-2 py-1" required>
+                                <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Import CSV</button>
+                            </form>
+                        </div>
                     </div>
                     <div class="mb-2 flex items-center gap-2">
                         <button id="download-sample-csv" class="bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700 text-xs">Download Sample CSV</button>
@@ -249,11 +275,350 @@
                             <button id="bulk-next-page" class="px-2 py-1 border rounded text-xs">Next</button>
                         </div>
                     </div>
+                    
+                    <!-- Bulk Schedule Form Modal -->
+                    <div id="bulk-form-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-4xl p-6 relative max-h-[90vh] overflow-y-auto">
+                            <button id="close-bulk-form-modal" class="absolute top-4 right-4 text-gray-400 hover:text-gray-700 text-2xl font-bold w-8 h-8 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors">&times;</button>
+                            <h3 class="text-xl font-semibold mb-6 text-gray-800 border-b pb-3">Create Bulk Message Schedule</h3>
+                            
+                            <form id="bulk-schedule-form" class="space-y-6">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    <!-- Left Column -->
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">Phone Numbers (Comma Separated)</label>
+                                            <textarea id="bulk-numbers" class="w-full border rounded px-3 py-2 resize-none" rows="8" placeholder="Enter phone numbers separated by commas&#10;Example: 919876543210, 918123456789, 917654321098" maxlength="7000" required></textarea>
+                                            <div class="text-xs text-gray-500 mt-1">
+                                                <span id="bulk-numbers-count">0</span> characters used (max 7000). 
+                                                <span id="bulk-numbers-count-display">0</span> numbers detected (max 500).
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">Message Text</label>
+                                            <textarea id="bulk-message" class="w-full border rounded px-3 py-2 resize-none" rows="4" placeholder="Enter your message text..." required></textarea>
+                                        </div>
+                                        
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">Media (Optional)</label>
+                                            <input type="file" id="bulk-media" class="w-full border rounded px-3 py-2" accept="image/*,video/*,application/pdf">
+                                            <div class="text-xs text-gray-500 mt-1">Image, Video, or PDF (max 100MB)</div>
+                                            <div id="bulk-media-preview" class="mt-2"></div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Right Column -->
+                                    <div class="space-y-4">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">Start Date & Time</label>
+                                            <input type="datetime-local" id="bulk-start-datetime" class="w-full border rounded px-3 py-2" required>
+                                        </div>
+                                        
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">Delay Between Messages (seconds)</label>
+                                            <input type="number" id="bulk-delay" class="w-full border rounded px-3 py-2" min="1" max="3600" value="1" required>
+                                            <div class="text-xs text-gray-500 mt-1">Minimum 1 second, maximum 3600 seconds (1 hour)</div>
+                                        </div>
+                                        
+                                        <div class="bg-gray-50 p-4 rounded border">
+                                            <h4 class="font-medium mb-2">Schedule Summary</h4>
+                                            <div id="bulk-schedule-summary" class="text-sm text-gray-600">
+                                                <div>Total numbers: <span id="summary-count">0</span></div>
+                                                <div>Estimated duration: <span id="summary-duration">0</span></div>
+                                                <div>Last message time: <span id="summary-end-time">-</span></div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <button type="button" id="bulk-preview-btn" class="w-full bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700">
+                                                Preview Message
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Preview Section -->
+                                <div id="bulk-preview-section" class="hidden">
+                                    <h4 class="font-medium mb-2">Message Preview</h4>
+                                    <div id="bulk-preview-content" class="bg-gray-50 p-4 rounded border">
+                                        <!-- Preview content will be rendered here -->
+                                    </div>
+                                </div>
+                                
+                                <div class="flex justify-end gap-3 pt-4 border-t">
+                                    <button type="button" id="cancel-bulk-form" class="px-6 py-2 rounded border hover:bg-gray-50">Cancel</button>
+                                    <button type="submit" class="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700">Create Schedule</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <div id="contacts" class="tab-pane hidden">
+                                            <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-semibold">Contacts Management</h2>
+                            <div class="flex items-center gap-2">
+                                <button id="copy-contacts-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Copy Numbers</button>
+                            </div>
+                        </div>
+                    
+                    <!-- Search Bar -->
+                    <div class="mb-4">
+                        <div class="flex items-center gap-2">
+                            <input type="text" id="contacts-search" class="flex-1 border rounded px-3 py-2" placeholder="Search contacts by name or number...">
+                            <button id="contacts-search-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 flex items-center gap-2">
+                                <span id="search-btn-text">Search</span>
+                                <div id="search-loading" class="hidden">
+                                    <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                </div>
+                            </button>
+                            <button id="contacts-clear-btn" class="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600">Clear</button>
+                            <span id="contacts-count" class="text-sm text-gray-600">0 contacts</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Contacts Table -->
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full bg-white rounded shadow">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-700">Avatar</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-700">Name</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-700">Number</th>
+                                    <th class="px-4 py-3 text-left text-xs font-semibold text-gray-700">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="contacts-list">
+                                <!-- Contacts will be rendered here -->
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Pagination -->
+                    <div class="flex justify-between items-center mt-4">
+                        <button id="contacts-prev-page" class="px-3 py-1 border rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">Previous</button>
+                        <span id="contacts-page-info" class="text-sm text-gray-600"></span>
+                        <button id="contacts-next-page" class="px-3 py-1 border rounded text-sm hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed">Next</button>
+                    </div>
+                    
+                    <!-- Loading and Status Messages -->
+                    <div id="contacts-loading" class="text-center py-8 text-gray-500 hidden">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-2"></div>
+                        Loading contacts...
+                    </div>
+                    <div id="contacts-error" class="text-center py-8 text-red-500 hidden">
+                        Failed to load contacts. Please try again.
+                    </div>
+                    <div id="contacts-empty" class="text-center py-8 text-gray-500 hidden">
+                        No contacts found.
+                    </div>
+                </div>
+                <div id="channels" class="tab-pane hidden">
+                    <div class="mb-4 bg-white rounded shadow p-4">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-semibold">Channels Management</h2>
+                            <div class="flex items-center gap-2">
+                                <select id="channel-fetch-method" class="border rounded px-3 py-1 text-sm">
+                                    <option value="all">All Channels</option>
+                                    <option value="followed">Followed Only</option>
+                                    <option value="subscribed">Subscribed Only</option>
+                                    <option value="admin">Admin Only</option>
+                                </select>
+                                <button id="refresh-channels-btn" class="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-sm">Refresh</button>
+                            </div>
+                        </div>
+                        <div class="text-sm text-gray-600 mb-4">
+                            <strong>Channel Types:</strong> 
+                            <span class="inline-block bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs mr-2">Admin</span> - You can send messages
+                            <span class="inline-block bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs ml-2">Read Only</span> - You can only read messages
+                        </div>
+                        
+                        <!-- Channel Send Options -->
+                        <div id="channel-send-options" class="mb-4 p-4 bg-gray-50 rounded border">
+                            <h3 class="text-lg font-semibold mb-3">Send Messages to Channels</h3>
+                            <div class="flex gap-2 mb-3">
+                                <button id="channel-send-to-all-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                                    Send to All Admin Channels
+                                </button>
+                                <button id="channel-send-specific-btn" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 text-sm">
+                                    Send to Specific Channel
+                                </button>
+                            </div>
+                            
+                            <!-- Global Channel Send Form -->
+                            <form id="channel-send-form-global" class="space-y-3 hidden">
+                                <div id="channel-id-input" class="hidden">
+                                    <label class="block text-sm font-medium mb-1">Channel ID</label>
+                                    <input type="text" class="w-full border rounded px-3 py-2 text-sm" placeholder="e.g., 120363208697463412@newsletter">
+                                    <div class="text-xs text-gray-500 mt-1">Enter the channel ID (ends with @newsletter or similar)</div>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Message</label>
+                                    <textarea id="channel-message-text-global" class="w-full border rounded px-3 py-2 resize-none" rows="3" placeholder="Enter your message..."></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Media (optional)</label>
+                                    <input type="file" id="channel-attachment-global" class="w-full border rounded px-3 py-2 text-sm" accept="image/*,video/*,application/pdf">
+                                    <div class="text-xs text-gray-500 mt-1">Image, Video, or PDF (max 100MB)</div>
+                                </div>
+                                <div class="flex gap-2">
+                                    <button type="button" onclick="cancelChannelSend()" class="px-4 py-2 rounded border text-sm">Cancel</button>
+                                    <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm">Send Message</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <div class="flex h-[600px] bg-white rounded shadow overflow-hidden">
+                        <!-- Sidebar: Channel List -->
+                        <div class="w-1/3 border-r overflow-y-auto" id="channel-list-sidebar">
+                            <div class="p-3 border-b bg-gray-50">
+                                <div class="text-sm font-semibold text-gray-700 mb-2">Channel List</div>
+                                <div id="channel-stats" class="text-xs text-gray-500"></div>
+                            </div>
+                            <div id="channel-list" class="divide-y"></div>
+                        </div>
+                        <!-- Main: Channel Messages -->
+                        <div class="flex-1 flex flex-col">
+                            <div id="channel-header" class="p-3 border-b bg-gray-50 font-semibold h-14 flex items-center">Select a channel</div>
+                            <div id="channel-message-container" class="flex-1 overflow-y-auto p-3 bg-gray-50"></div>
+                            <form id="channel-send-form" class="flex items-end gap-2 p-3 border-t bg-white hidden">
+                                <input type="file" id="channel-attachment" class="hidden" accept="image/*,video/*,application/pdf">
+                                <label for="channel-attachment" class="cursor-pointer text-gray-500 hover:text-green-600"><svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l7.07-7.07a4 4 0 00-5.656-5.657l-7.071 7.07a6 6 0 108.485 8.486L20.485 13" /></svg></label>
+                                <textarea id="channel-message-text" class="flex-1 border rounded px-3 py-2 resize-none" rows="1" placeholder="Type a message..." style="min-height:40px;"></textarea>
+                                <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Send</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <div id="automate" class="tab-pane hidden">
+                    <div class="flex flex-col items-start gap-4 bg-white rounded shadow p-6">
+                        <div class="flex w-full items-center justify-between mb-2">
+                            <h2 class="text-xl font-semibold">Automate (AI Automation)</h2>
+                            <div class="flex items-center gap-2">
+                                <button id="test-genai-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 relative">
+                                    Test GenAI
+                                    <span id="test-genai-status-dot" class="inline-block w-3 h-3 rounded-full ml-2 align-middle bg-gray-400"></span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="text-gray-600 mb-4">Create, edit, and manage chat automations using Google GenAI. Automations can auto-reply or send scheduled messages to selected chats.</div>
+                        <div class="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4">
+                            <div class="text-yellow-800 text-sm">
+                                <strong>⚠️ Setup Required:</strong> To use Automate features, create a <code>.env</code> file in the project root with:
+                                <br><code>GOOGLE_API_KEY=YourAPIkeyFromGoogleAIstudio</code>
+                                <br><code>GOOGLE_MODEL=gemini-2.5-flash</code>
+                                <br>Get your API key from <a href="https://aistudio.google.com/" target="_blank" class="text-blue-600 hover:underline">Google AI Studio</a>
+                            </div>
+                        </div>
+                        <div id="automate-list-container" class="w-full"></div>
+                        <button id="add-automation-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Add Automation</button>
+                        <!-- Modals and forms will be injected here by JS -->
+                    </div>
+                    <!-- Add/Edit Automation Modal -->
+                    <div id="automation-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-lg p-6 relative">
+                            <button id="close-automation-modal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700 text-2xl">&times;</button>
+                            <h3 id="automation-modal-title" class="text-lg font-semibold mb-4">Add Automation</h3>
+                            <form id="automation-form" class="space-y-4">
+                                <input type="hidden" id="automation-id">
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Automation Type</label>
+                                    <select id="automation-type-select" class="w-full border rounded px-3 py-2" required>
+                                        <option value="chat">Chat Automation</option>
+                                        <option value="channel">Channel Automation</option>
+                                    </select>
+                                </div>
+                                <div id="automation-chat-section">
+                                    <label class="block text-sm font-medium mb-1">Chat</label>
+                                    <select id="automation-chat-select" class="w-full border rounded px-3 py-2">
+                                        <option value="">-- Select chat --</option>
+                                    </select>
+                                </div>
+                                <div id="automation-channel-section" class="hidden">
+                                    <label class="block text-sm font-medium mb-1">Channel</label>
+                                    <select id="automation-channel-select" class="w-full border rounded px-3 py-2">
+                                        <option value="">-- Select channel --</option>
+                                    </select>
+                                    <div class="text-xs text-gray-500 mt-1">Note: Auto-reply is not available for channels. Only scheduled messages are supported.</div>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">System Prompt</label>
+                                    <textarea id="automation-system-prompt" class="w-full border rounded px-3 py-2" rows="2" required maxlength="1000" placeholder="e.g. You are a helpful assistant..."></textarea>
+                                </div>
+                                <div id="automation-auto-reply-section">
+                                    <label class="block text-sm font-medium mb-1">Auto Reply Prompt</label>
+                                    <textarea id="automation-auto-reply-prompt" class="w-full border rounded px-3 py-2" rows="2" maxlength="1000" placeholder="e.g. Reply to the user with..."></textarea>
+                                    <div class="text-xs text-gray-500 mt-1">Required for chat automations. Not available for channels.</div>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Schedule (Days, Times) <span class='text-xs text-gray-500' id="schedule-optional">(optional)</span><span class='text-xs text-red-500 hidden' id="schedule-required">(required for channels)</span></label>
+                                    <input type="text" id="automation-schedule" class="w-full border rounded px-3 py-2" placeholder='e.g. {"days":["Mon","Wed"],"times":["09:00","18:00"]}'>
+                                    <div class="text-xs text-gray-500">JSON: days (Mon-Sun), times (24h, e.g. "09:00"). Leave empty for auto-reply only.</div>
+                                    <div class="text-xs text-gray-400 mt-1">Sample: <span class="font-mono">{"days":["Mon","Wed"],"times":["09:00","18:00"]}</span></div>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Status</label>
+                                    <select id="automation-status" class="w-full border rounded px-3 py-2">
+                                        <option value="active">Active</option>
+                                        <option value="paused">Paused</option>
+                                    </select>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-automation-btn" class="px-4 py-2 rounded border">Cancel</button>
+                                    <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Save</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                    <!-- Automation Log Modal -->
+                    <div id="automation-log-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6 relative">
+                            <button id="close-automation-log-modal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700 text-2xl">&times;</button>
+                            <h3 class="text-lg font-semibold mb-4">Automation Log</h3>
+                            <div id="automation-log-list" class="overflow-x-auto mb-4"></div>
+                            <div class="flex justify-between items-center">
+                                <button id="automation-log-prev" class="px-2 py-1 border rounded text-xs">Prev</button>
+                                <span id="automation-log-page-info" class="text-xs"></span>
+                                <button id="automation-log-next" class="px-2 py-1 border rounded text-xs">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Test GenAI Modal -->
+                    <div id="test-genai-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-lg p-6 relative">
+                            <button id="close-test-genai-modal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700 text-2xl">&times;</button>
+                            <h3 class="text-lg font-semibold mb-4">Test GenAI (with Google Search Grounding)</h3>
+                            <form id="test-genai-form" class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">System Prompt</label>
+                                    <textarea id="test-genai-system-prompt" class="w-full border rounded px-3 py-2" rows="2" required maxlength="1000" placeholder="e.g. You are a helpful assistant..."></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">Auto Reply Prompt</label>
+                                    <textarea id="test-genai-auto-reply-prompt" class="w-full border rounded px-3 py-2" rows="2" required maxlength="1000" placeholder="e.g. Reply to the user with..."></textarea>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">User Message</label>
+                                    <textarea id="test-genai-user-message" class="w-full border rounded px-3 py-2" rows="2" required maxlength="1000" placeholder="e.g. Who won the euro 2024?"></textarea>
+                                </div>
+                                <div class="flex justify-end gap-2">
+                                    <button type="button" id="cancel-test-genai-btn" class="px-4 py-2 rounded border">Cancel</button>
+                                    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Test</button>
+                                </div>
+                            </form>
+                            <div id="test-genai-result" class="mt-4 text-sm text-gray-800"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
     <script src="/js/main.js"></script>
+    <script src="/js/channels.js"></script>
+    <script src="/js/bulk.js"></script>
+    <script src="/js/contacts.js"></script>
+    <script src="/js/automate.js"></script>
     <script>
       // Simple tab switching logic
       document.querySelectorAll('.tab-link').forEach(btn => {
