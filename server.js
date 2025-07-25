@@ -663,41 +663,63 @@ setInterval(async () => {
         if (isNaN(sendTime.getTime()) || sendTime > now) continue;
         // Double-check status before sending
         if (r.status === 'sent') continue;
-        // Send message
+        // Send message with retry mechanism
         try {
             const normalizedNumber = r.number.trim();
             const chatId = !normalizedNumber.endsWith('@c.us') && !normalizedNumber.endsWith('@g.us')
                 ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
                 : normalizedNumber;
-            if (r.media) {
-                let media;
-                if (r.media.startsWith('http')) {
-                    const fetch = require('node-fetch');
-                    const resp = await fetch(r.media);
-                    if (!resp.ok) throw new Error('Failed to fetch media');
-                    const buf = await resp.buffer();
-                    const mime = resp.headers.get('content-type') || 'application/octet-stream';
-                    media = new MessageMedia(mime, buf.toString('base64'), r.media.split('/').pop());
+            
+            // Use retry mechanism for sending messages
+            await retryOperation(async () => {
+                if (r.media) {
+                    let media;
+                    if (r.media.startsWith('http')) {
+                        const fetch = require('node-fetch');
+                        const resp = await fetch(r.media);
+                        if (!resp.ok) throw new Error('Failed to fetch media');
+                        const buf = await resp.buffer();
+                        const mime = resp.headers.get('content-type') || 'application/octet-stream';
+                        media = new MessageMedia(mime, buf.toString('base64'), r.media.split('/').pop());
+                    } else {
+                        // Handle media paths relative to public directory
+                        let absPath;
+                        if (r.media.startsWith('/message-templates/') || r.media.startsWith('/js/') || r.media.startsWith('/')) {
+                            // Path is relative to public directory
+                            absPath = path.join(__dirname, 'public', r.media);
+                        } else {
+                            // Path is relative to server root
+                            absPath = path.join(__dirname, r.media);
+                        }
+                        
+                        if (!fs.existsSync(absPath)) {
+                            console.error(`Media file not found: ${absPath} (original path: ${r.media})`);
+                            throw new Error(`Media file not found: ${r.media}`);
+                        }
+                        
+                        const buf = fs.readFileSync(absPath);
+                        const mime = require('mime-types').lookup(absPath) || 'application/octet-stream';
+                        media = new MessageMedia(mime, buf.toString('base64'), path.basename(absPath));
+                    }
+                    await client.sendMessage(chatId, media, { caption: r.message });
                 } else {
-                    const absPath = path.join(__dirname, r.media);
-                    if (!fs.existsSync(absPath)) throw new Error('Media file not found');
-                    const buf = fs.readFileSync(absPath);
-                    const mime = require('mime-types').lookup(absPath) || 'application/octet-stream';
-                    media = new MessageMedia(mime, buf.toString('base64'), path.basename(absPath));
+                    await client.sendMessage(chatId, r.message);
                 }
-                await client.sendMessage(chatId, media, { caption: r.message });
-            } else {
-                await client.sendMessage(chatId, r.message);
-            }
+            }, 3, 2000); // 3 retries with 2 second delay
+            
             records[i].status = 'sent';
             records[i].sent_datetime = new Date().toISOString();
             changed = true;
             writeJson(BULK_FILE, records);
             await new Promise(res => setTimeout(res, BULK_SEND_DELAY_SEC * 1000));
         } catch (err) {
-            console.error('Bulk send error:', err);
+            console.error(`Bulk send error for ${r.number}:`, err.message);
+            console.error(`Message: ${r.message}`);
+            console.error(`Media: ${r.media}`);
+            console.error(`Full error:`, err);
             records[i].status = 'failed';
             records[i].sent_datetime = new Date().toISOString();
+            records[i].error = err.message; // Store error message for debugging
             changed = true;
             writeJson(BULK_FILE, records);
         }
@@ -1972,6 +1994,7 @@ app.post('/api/bulk-test/:id', async (req, res) => {
         }
         
         record.status = 'pending';
+        delete record.error; // Clear any previous error
         
         // Update the record
         records[recordIndex] = record;
@@ -1980,6 +2003,36 @@ app.post('/api/bulk-test/:id', async (req, res) => {
         res.json({ success: true });
     } catch (err) {
         console.error('Bulk test error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Retry failed bulk messages
+app.post('/api/bulk-retry/:filename', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    
+    try {
+        const filename = decodeURIComponent(req.params.filename);
+        const records = readJson(BULK_FILE);
+        let retryCount = 0;
+        
+        for (let i = 0; i < records.length; i++) {
+            if (records[i].import_filename === filename && records[i].status === 'failed') {
+                records[i].status = 'pending';
+                records[i].send_datetime = new Date().toISOString();
+                delete records[i].error; // Clear previous error
+                retryCount++;
+            }
+        }
+        
+        writeJson(BULK_FILE, records);
+        
+        res.json({ 
+            success: true, 
+            retried: retryCount 
+        });
+    } catch (err) {
+        console.error('Bulk retry error:', err);
         res.status(500).json({ error: err.message });
     }
 });

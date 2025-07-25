@@ -14,6 +14,7 @@
     const bulkImportFilter = document.getElementById('bulk-import-filter');
     const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
     const bulkCancelBtn = document.getElementById('bulk-cancel-btn');
+const bulkRetryBtn = document.getElementById('bulk-retry-btn');
     const bulkPrevPage = document.getElementById('bulk-prev-page');
     const bulkNextPage = document.getElementById('bulk-next-page');
     const bulkPageInfo = document.getElementById('bulk-page-info');
@@ -80,6 +81,7 @@
 
         if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', handleBulkDelete);
         if (bulkCancelBtn) bulkCancelBtn.addEventListener('click', handleBulkCancel);
+        if (bulkRetryBtn) bulkRetryBtn.addEventListener('click', handleBulkRetry);
         
         if (bulkPrevPage) {
             bulkPrevPage.addEventListener('click', () => {
@@ -300,7 +302,7 @@
                 <td class="px-2 py-1 text-xs">${r.media ? `<a href='${escapeHtml(r.media)}' target='_blank' class='text-green-600 underline'>Media</a>` : ''}</td>
                 <td class="px-2 py-1 text-xs">${escapeHtml(r.send_datetime)}</td>
                 <td class="px-2 py-1 text-xs">${escapeHtml(r.import_filename)}</td>
-                <td class="px-2 py-1 text-xs">${renderBulkStatus(r.status)}</td>
+                <td class="px-2 py-1 text-xs">${renderBulkStatus(r.status, r.error)}</td>
                 <td class="px-2 py-1 text-xs">${escapeHtml(r.sent_datetime || '')}</td>
                 <td class="px-2 py-1 text-xs">
                     <button class="test-bulk-btn bg-blue-600 text-white px-2 py-1 rounded text-xs" data-uid="${r.unique_id}">Test</button>
@@ -322,12 +324,15 @@
     }
 
     // Render Bulk Status
-    function renderBulkStatus(status) {
+    function renderBulkStatus(status, error = null) {
         if (status === 'pending') return '<span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs">Pending</span>';
         if (status === 'sent') return '<span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs">Sent</span>';
         if (status === 'canceled') return '<span class="bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs">Canceled</span>';
         if (status === 'cancelled') return '<span class="bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs">Cancelled</span>';
-        if (status === 'failed') return '<span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs">Failed</span>';
+        if (status === 'failed') {
+            const errorText = error ? ` (${error})` : '';
+            return `<span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs" title="${escapeHtml(error || 'Unknown error')}">Failed${errorText}</span>`;
+        }
         return escapeHtml(status);
     }
 
@@ -389,6 +394,25 @@
                 loadBulkImports();
             })
             .catch(err => alert(`Cancel failed: ${err.message}`));
+    }
+
+    // Handle Bulk Retry
+    function handleBulkRetry() {
+        const filename = bulkImportFilter ? bulkImportFilter.value : '';
+        if (!filename) return alert('Select an import filename to retry.');
+        if (!confirm('Retry all failed records for this import?')) return;
+        
+        fetch(`/api/bulk-retry/${encodeURIComponent(filename)}`, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.retried > 0) {
+                    alert(`Retrying ${data.retried} failed messages.`);
+                } else {
+                    alert('No failed messages found to retry.');
+                }
+                loadBulkImports();
+            })
+            .catch(err => alert(`Retry failed: ${err.message}`));
     }
 
     // Show Bulk Test Options Dropdown
