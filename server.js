@@ -11,6 +11,8 @@ const TEMPLATES_FILE = path.join(__dirname, 'templates.json');
 const BULK_FILE = path.join(__dirname, 'bulk_messages.json');
 const SENT_MESSAGES_FILE = path.join(__dirname, 'sent_messages.json');
 const DETECTED_CHANNELS_FILE = path.join(__dirname, 'detected_channels.json');
+const LEADS_FILE = path.join(__dirname, 'leads.json');
+const LEADS_CONFIG_FILE = path.join(__dirname, 'leads-config.json');
 const fetch = require('node-fetch'); // Add at the top with other requires
 const TEMPLATE_MEDIA_DIR = path.join(__dirname, 'public', 'message-templates');
 if (!fs.existsSync(TEMPLATE_MEDIA_DIR)) fs.mkdirSync(TEMPLATE_MEDIA_DIR, { recursive: true });
@@ -62,6 +64,20 @@ function initializeJsonFiles() {
         {
             path: DETECTED_CHANNELS_FILE,
             defaultContent: []
+        },
+        {
+            path: LEADS_FILE,
+            defaultContent: { leads: [] }
+        },
+        {
+            path: LEADS_CONFIG_FILE,
+            defaultContent: {
+                enabled: false,
+                systemPrompt: '',
+                includeJsonContext: true,
+                autoReply: false,
+                autoReplyPrompt: ''
+            }
         }
     ];
     
@@ -102,13 +118,27 @@ async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessa
   }
 }
 function appendAutomationLog(automation, entry) {
-  const logPath = path.join(__dirname, automation.logFile);
-  let logs = [];
-  if (fs.existsSync(logPath)) {
-    try { logs = JSON.parse(fs.readFileSync(logPath, 'utf8')); } catch {}
+  try {
+    const logPath = path.join(__dirname, automation.logFile);
+    let logs = [];
+    if (fs.existsSync(logPath)) {
+      try { logs = JSON.parse(fs.readFileSync(logPath, 'utf8')); } catch {}
+    }
+    logs.unshift({ ...entry, time: new Date().toISOString() });
+    
+    // Keep only last 1000 log entries to prevent disk space issues
+    if (logs.length > 1000) {
+      logs = logs.slice(0, 1000);
+    }
+    
+    const writeSuccess = writeJson(logPath, logs);
+    if (!writeSuccess) {
+      console.log(`[AUTOMATION] Failed to save log due to disk space: ${automation.chatName}`);
+    }
+  } catch (error) {
+    console.error(`[ERROR] Failed to append automation log:`, error.message);
+    // Don't let log errors crash the app
   }
-  logs.unshift({ ...entry, time: new Date().toISOString() });
-  fs.writeFileSync(logPath, JSON.stringify(logs, null, 2));
 }
 function readAutomations() {
   if (!fs.existsSync(AUTOMATIONS_FILE)) return [];
@@ -149,12 +179,135 @@ function writeJson(file, data) {
         fs.writeFileSync(file, JSON.stringify(data, null, 2));
     } catch (error) {
         console.error(`[ERROR] Failed to write ${path.basename(file)}:`, error.message);
+        
+        // Handle disk space errors gracefully
+        if (error.code === 'ENOSPC') {
+            console.error(`[ERROR] Disk space full! Cannot write ${path.basename(file)}`);
+            console.error(`[ERROR] Please free up disk space to continue normal operation`);
+            
+            // Don't throw error for disk space issues - just log and continue
+            // This prevents the app from crashing
+            return false;
+        }
+        
+        // For other errors, still throw to maintain existing behavior
         throw error;
+    }
+    return true;
+}
+
+// Check disk space and cleanup if needed
+function checkDiskSpace() {
+    try {
+        const stats = fs.statSync(__dirname);
+        const freeSpace = require('child_process').execSync('df -h . | tail -1 | awk \'{print $4}\'').toString().trim();
+        console.log(`[DISK] Free space: ${freeSpace}`);
+        
+        // If free space is less than 1GB, trigger cleanup
+        if (freeSpace.includes('G') && parseFloat(freeSpace) < 1) {
+            console.log(`[DISK] Low disk space detected, cleaning up old logs and temp files...`);
+            cleanupOldLogs();
+            cleanupTempFiles();
+        }
+    } catch (error) {
+        console.error(`[ERROR] Failed to check disk space:`, error.message);
     }
 }
 
-// Configure multer for file uploads
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB max
+// Clean up old log files to free disk space
+function cleanupOldLogs() {
+    try {
+        const files = fs.readdirSync(__dirname);
+        const logFiles = files.filter(file => 
+            file.startsWith('automation_log_') && file.endsWith('.json')
+        );
+        
+        // Sort by modification time (oldest first)
+        logFiles.sort((a, b) => {
+            const statA = fs.statSync(path.join(__dirname, a));
+            const statB = fs.statSync(path.join(__dirname, b));
+            return statA.mtime.getTime() - statB.mtime.getTime();
+        });
+        
+        // Keep only the 10 most recent log files
+        const filesToDelete = logFiles.slice(0, -10);
+        
+        filesToDelete.forEach(file => {
+            try {
+                fs.unlinkSync(path.join(__dirname, file));
+                console.log(`[CLEANUP] Deleted old log file: ${file}`);
+            } catch (error) {
+                console.error(`[ERROR] Failed to delete ${file}:`, error.message);
+            }
+        });
+        
+        console.log(`[CLEANUP] Cleaned up ${filesToDelete.length} old log files`);
+    } catch (error) {
+        console.error(`[ERROR] Failed to cleanup old logs:`, error.message);
+    }
+}
+
+// Clean up old temporary files
+function cleanupTempFiles() {
+    try {
+        const tempDir = path.join(__dirname, 'temp');
+        if (!fs.existsSync(tempDir)) return;
+        
+        const files = fs.readdirSync(tempDir);
+        const now = Date.now();
+        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
+        
+        files.forEach(file => {
+            const filePath = path.join(tempDir, file);
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtime.getTime() > maxAge) {
+                fs.unlinkSync(filePath);
+                console.log(`[CLEANUP] Removed old temp file: ${file}`);
+            }
+        });
+    } catch (err) {
+        console.error('[CLEANUP] Error cleaning temp files:', err);
+    }
+}
+
+// Configure multer for different upload types
+const upload = multer({ 
+    storage: multer.diskStorage({
+        destination: (req, file, cb) => {
+            // Create temp directory if it doesn't exist
+            const tempDir = path.join(__dirname, 'temp');
+            if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true });
+            }
+            cb(null, tempDir);
+        },
+        filename: (req, file, cb) => {
+            const timestamp = Date.now();
+            const originalName = file.originalname;
+            const extension = originalName.split('.').pop();
+            cb(null, `temp-${timestamp}.${extension}`);
+        }
+    }), 
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB max
+});
+
+// Configure multer for template uploads (uses memory storage for buffer access)
+const templateUpload = multer({ 
+    storage: multer.memoryStorage(), 
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB max for templates
+});
+
+// Configure multer for message media uploads (uses memory storage for buffer access)
+const messageUpload = multer({ 
+    storage: multer.memoryStorage(), 
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB max for messages
+});
+
+// Configure multer for CSV uploads (uses memory storage for buffer access)
+const csvUpload = multer({ 
+    storage: multer.memoryStorage(), 
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB max for CSV files
+});
 
 // Initialize Express app
 const app = express();
@@ -172,8 +325,22 @@ const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: { 
         headless: false, 
-        protocolTimeout: 120000,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        protocolTimeout: 300000, // Increased to 5 minutes
+        timeout: 60000,
+        args: [
+            '--no-sandbox', 
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--disable-gpu',
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            '--disable-features=TranslateUI',
+            '--disable-ipc-flooding-protection'
+        ]
     }
 });
 
@@ -220,6 +387,16 @@ client.on('disconnected', (reason) => {
     waStatus = 'disconnected';
     ready = false;
     console.log('WhatsApp client disconnected:', reason);
+    
+    // Attempt to reconnect after a delay
+    setTimeout(async () => {
+        try {
+            console.log('[RECONNECT] Attempting to reconnect WhatsApp client...');
+            await client.initialize();
+        } catch (err) {
+            console.error('[RECONNECT] Failed to reconnect:', err.message);
+        }
+    }, 10000); // Wait 10 seconds before reconnecting
 });
 
 client.on('message', async (msg) => {
@@ -250,17 +427,20 @@ client.on('message', async (msg) => {
     }
     // Auto-reply logic (only for chats, not channels)
     if (!msg.fromMe) {
+        let processed = false;
+        
+        // 1. Check regular automations first
         const automations = readAutomations().filter(a => a.status === 'active' && a.chatId === msg.from);
         for (const a of automations) {
             // Skip channel automations for auto-reply (channels only support scheduled messages)
             const isChannel = a.automationType === 'channel' || a.chatId.endsWith('@newsletter') || a.chatId.endsWith('@broadcast');
             if (isChannel) continue;
             
-            // Compose chat history (last 25 messages)
+            // Compose chat history (last 100 messages)
             let chatHistory = '';
             try {
                 const chat = await client.getChatById(a.chatId);
-                const msgs = await chat.fetchMessages({ limit: 25 });
+                const msgs = await chat.fetchMessages({ limit: 100 });
                 chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body}`).join('\n');
             } catch (err) {
                 console.error(`[AUTOMATION] Failed to get chat history for auto-reply:`, err.message);
@@ -283,6 +463,7 @@ client.on('message', async (msg) => {
             try {
                 await msg.reply(aiReply);
                 appendAutomationLog(a, { type: 'auto-reply', message: aiReply });
+                processed = true;
             } catch (err) {
                 console.error(`[AUTOMATION] Failed to send auto-reply:`, err.message);
                 if (err.message.includes('detached Frame')) {
@@ -293,11 +474,180 @@ client.on('message', async (msg) => {
                 }
             }
         }
+        
+        // 2. Check leads auto-reply if no automation handled it
+        if (!processed) {
+            await handleLeadsAutoReply(msg);
+        }
     }
 });
 
-// Initialize WhatsApp client
-client.initialize();
+// Handle leads auto-reply functionality
+async function handleLeadsAutoReply(msg) {
+    try {
+        // Extract mobile number from WhatsApp chat ID
+        const chatId = msg.from;
+        if (!chatId.endsWith('@c.us')) return; // Only handle individual chats
+        
+        const mobileNumber = chatId.replace('@c.us', '');
+        
+        // Load leads data
+        const leadsData = readJson(LEADS_FILE, { leads: [] });
+        if (!leadsData.leads || !Array.isArray(leadsData.leads)) return;
+        
+        // Find lead with auto chat enabled for this mobile number
+        const lead = leadsData.leads.find(l => {
+            const leadMobile = l.mobile?.replace(/[^\d]/g, ''); // Remove non-digits
+            const msgMobile = mobileNumber.replace(/[^\d]/g, ''); // Remove non-digits
+            return l.auto_chat_enabled && (
+                leadMobile === msgMobile ||
+                leadMobile === msgMobile.slice(-10) || // Compare last 10 digits
+                msgMobile === leadMobile.slice(-10) ||
+                leadMobile.endsWith(msgMobile.slice(-10)) ||
+                msgMobile.endsWith(leadMobile.slice(-10))
+            );
+        });
+        
+        if (!lead) {
+            console.log(`[LEADS AUTO-REPLY] No lead found with auto chat enabled for mobile: ${mobileNumber}`);
+            return;
+        }
+        
+        console.log(`[LEADS AUTO-REPLY] Processing auto-reply for lead: ${lead.name} (${lead.mobile})`);
+        
+        // Load leads auto chat configuration
+        const config = readJson(LEADS_CONFIG_FILE, {
+            enabled: false,
+            systemPrompt: '',
+            includeJsonContext: true,
+            autoReply: false,
+            autoReplyPrompt: ''
+        });
+        
+        // Check if auto reply is enabled in config
+        if (!config.autoReply || !config.systemPrompt || !config.autoReplyPrompt) {
+            console.log(`[LEADS AUTO-REPLY] Auto reply not configured for leads`);
+            return;
+        }
+        
+        // Get chat history
+        let chatHistory = '';
+        try {
+            const chat = await client.getChatById(chatId);
+            const msgs = await chat.fetchMessages({ limit: 100 });
+            chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body || '[Media]'}`).join('\n');
+        } catch (err) {
+            console.error(`[LEADS AUTO-REPLY] Failed to get chat history:`, err.message);
+        }
+        
+        // Build full prompt
+        let fullPrompt = config.systemPrompt;
+        
+        if (config.includeJsonContext) {
+            fullPrompt += `\n\nLead Context:\n${JSON.stringify(lead, null, 2)}`;
+        }
+        
+        if (chatHistory) {
+            fullPrompt += `\n\nChat History:\n${chatHistory}`;
+        }
+        
+        fullPrompt += `\n\nAuto Reply Instructions:\n${config.autoReplyPrompt}`;
+        fullPrompt += `\n\nUser's latest message: ${msg.body}`;
+        
+        // Call GenAI
+        const aiReply = await callGenAI({
+            systemPrompt: fullPrompt,
+            autoReplyPrompt: config.autoReplyPrompt,
+            chatHistory,
+            userMessage: msg.body
+        });
+        
+        if (!aiReply) {
+            console.error(`[LEADS AUTO-REPLY] GenAI failed for lead: ${lead.name}`);
+            // Log error to lead's auto chat logs
+            await logLeadAutoChatMessage(lead.id, 'error', 'GenAI failed to generate response', fullPrompt);
+            return;
+        }
+        
+        // Send reply
+        try {
+            await msg.reply(aiReply);
+            console.log(`[LEADS AUTO-REPLY] Successfully sent reply to ${lead.name}: ${aiReply.substring(0, 100)}...`);
+            
+            // Log successful auto-reply to lead's auto chat logs
+            await logLeadAutoChatMessage(lead.id, 'auto-reply', aiReply, fullPrompt);
+            
+        } catch (err) {
+            console.error(`[LEADS AUTO-REPLY] Failed to send reply to ${lead.name}:`, err.message);
+            // Log error to lead's auto chat logs
+            await logLeadAutoChatMessage(lead.id, 'error', `Failed to send reply: ${err.message}`, fullPrompt);
+        }
+        
+    } catch (err) {
+        console.error(`[LEADS AUTO-REPLY] Error in handleLeadsAutoReply:`, err.message);
+    }
+}
+
+// Log message to lead's auto chat logs
+async function logLeadAutoChatMessage(leadId, type, message, prompt = '') {
+    try {
+        const leadsData = readJson(LEADS_FILE, { leads: [] });
+        if (!leadsData.leads || !Array.isArray(leadsData.leads)) return;
+        
+        const leadIndex = leadsData.leads.findIndex(l => l.id === leadId);
+        if (leadIndex === -1) return;
+        
+        if (!leadsData.leads[leadIndex].auto_chat_logs) {
+            leadsData.leads[leadIndex].auto_chat_logs = [];
+        }
+        
+        leadsData.leads[leadIndex].auto_chat_logs.push({
+            timestamp: new Date().toISOString(),
+            type: type,
+            message: message,
+            prompt: prompt // Include the full prompt used
+        });
+        
+        // Keep only last 50 logs
+        if (leadsData.leads[leadIndex].auto_chat_logs.length > 50) {
+            leadsData.leads[leadIndex].auto_chat_logs = leadsData.leads[leadIndex].auto_chat_logs.slice(-50);
+        }
+        
+        // Update last_updated timestamp
+        leadsData.leads[leadIndex].last_updated = new Date().toISOString();
+        
+        // Save back to file
+        writeJson(LEADS_FILE, leadsData);
+        
+        console.log(`[LEADS AUTO-REPLY] Logged ${type} message for lead: ${leadIndex}`);
+        
+    } catch (err) {
+        console.error(`[LEADS AUTO-REPLY] Error logging message:`, err.message);
+    }
+}
+
+// Initialize WhatsApp client with error handling
+async function initializeWhatsAppClient() {
+    try {
+        console.log('[INIT] Starting WhatsApp client initialization...');
+        await client.initialize();
+    } catch (err) {
+        console.error('[INIT] Failed to initialize WhatsApp client:', err.message);
+        console.log('[INIT] Retrying in 30 seconds...');
+        
+        // Retry after 30 seconds
+        setTimeout(async () => {
+            try {
+                console.log('[INIT] Retrying WhatsApp client initialization...');
+                await client.initialize();
+            } catch (retryErr) {
+                console.error('[INIT] Retry failed:', retryErr.message);
+            }
+        }, 30000);
+    }
+}
+
+initializeWhatsAppClient();
 
 // --- Bulk Message Scheduler ---
 const BULK_SEND_DELAY_SEC = 1; // default delay between messages
@@ -388,7 +738,7 @@ setInterval(async () => {
             let chatHistory = '';
             try {
                 const chat = await client.getChatById(automation.chatId);
-                const msgs = await chat.fetchMessages({ limit: 25 });
+                const msgs = await chat.fetchMessages({ limit: 100 });
                 chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body}`).join('\n');
             } catch (err) {
                 console.error(`[AUTOMATION] Failed to get chat history for ${automation.chatName}:`, err.message);
@@ -474,47 +824,69 @@ setInterval(async () => {
 
 // Utility to append to sent messages log
 function appendSentMessageLog(entry) {
-    console.log('[DEBUG] appendSentMessageLog called with:', entry);
-    let logs = readJson(SENT_MESSAGES_FILE);
-    logs.unshift(entry); // newest first
-    if (logs.length > 1000) logs = logs.slice(0, 1000); // cap to 1000
-    writeJson(SENT_MESSAGES_FILE, logs);
+    try {
+        const logs = readJson(SENT_MESSAGES_FILE);
+        logs.unshift({ ...entry, time: new Date().toISOString() });
+        
+        // Keep only last 1000 sent messages to prevent disk space issues
+        if (logs.length > 1000) {
+            logs.splice(1000);
+        }
+        
+        const writeSuccess = writeJson(SENT_MESSAGES_FILE, logs);
+        if (!writeSuccess) {
+            console.log(`[SENT] Failed to save sent message log due to disk space`);
+        }
+    } catch (error) {
+        console.error(`[ERROR] Failed to append sent message log:`, error.message);
+        // Don't let log errors crash the app
+    }
 }
 
 // Utility to manage detected channels
 function addDetectedChannel(channelId, channelInfo = {}) {
-    let channels = readJson(DETECTED_CHANNELS_FILE);
-    // Check if channel already exists
-    const existingIndex = channels.findIndex(ch => ch.id === channelId);
-    const now = new Date().toISOString();
-    if (existingIndex !== -1) {
-        // Update existing channel
-        channels[existingIndex] = {
-            ...channels[existingIndex],
-            ...channelInfo,
-            lastSeen: now,
-            messageCount: (channels[existingIndex].messageCount || 0) + 1
-        };
-    } else {
-        // Add new channel
-        channels.push({
-            id: channelId,
-            name: channelInfo.name || channelId,
-            type: channelInfo.type || 'unknown',
-            isNewsletter: channelId.endsWith('@newsletter'),
-            isBroadcast: channelId === 'status@broadcast',
-            firstSeen: now,
-            lastSeen: now,
-            messageCount: 1,
-            ...channelInfo
-        });
+    try {
+        let channels = readJson(DETECTED_CHANNELS_FILE);
+        // Check if channel already exists
+        const existingIndex = channels.findIndex(ch => ch.id === channelId);
+        const now = new Date().toISOString();
+        if (existingIndex !== -1) {
+            // Update existing channel
+            channels[existingIndex] = {
+                ...channels[existingIndex],
+                ...channelInfo,
+                lastSeen: now,
+                messageCount: (channels[existingIndex].messageCount || 0) + 1
+            };
+        } else {
+            // Add new channel
+            channels.push({
+                id: channelId,
+                name: channelInfo.name || channelId,
+                type: channelInfo.type || 'unknown',
+                isNewsletter: channelId.endsWith('@newsletter'),
+                isBroadcast: channelId === 'status@broadcast',
+                firstSeen: now,
+                lastSeen: now,
+                messageCount: 1,
+                ...channelInfo
+            });
+        }
+        // Keep only the latest 1000 channels
+        if (channels.length > 1000) {
+            channels = channels.slice(-1000);
+        }
+        
+        const writeSuccess = writeJson(DETECTED_CHANNELS_FILE, channels);
+        if (writeSuccess) {
+            console.log(`[CHANNEL] Added/Updated detected channel: ${channelId}`);
+        } else {
+            console.log(`[CHANNEL] Failed to save channel data due to disk space: ${channelId}`);
+        }
+    } catch (error) {
+        console.error(`[ERROR] Failed to add detected channel ${channelId}:`, error.message);
+        // Don't let channel detection errors crash the app
     }
-    // Keep only the latest 1000 channels
-    if (channels.length > 1000) {
-        channels = channels.slice(-1000);
-    }
-    writeJson(DETECTED_CHANNELS_FILE, channels);
-    console.log(`[CHANNEL] Added/Updated detected channel: ${channelId}`);
 }
 
 // Get all detected channels
@@ -691,11 +1063,24 @@ app.get('/api/status', (req, res) => {
     });
 });
 
+// Helper function for retrying operations
+async function retryOperation(operation, maxRetries = 3, delay = 2000) {
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await operation();
+        } catch (err) {
+            if (i === maxRetries - 1) throw err;
+            console.log(`Operation failed, retrying in ${delay}ms... (${i + 1}/${maxRetries})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+}
+
 // Get all chats
 app.get('/api/chats', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
     try {
-        const chats = await client.getChats();
+        const chats = await retryOperation(() => client.getChats());
         res.json(chats.map(chat => ({
             id: chat.id._serialized,
             name: chat.name || chat.formattedTitle || chat.id.user,
@@ -703,7 +1088,7 @@ app.get('/api/chats', async (req, res) => {
             unreadCount: chat.unreadCount
         })));
     } catch (err) {
-        console.error('Failed to fetch chats:', err);
+        console.error('Failed to fetch chats after retries:', err);
         res.status(500).json({ error: 'Failed to fetch chats', details: err.message });
     }
 });
@@ -742,22 +1127,50 @@ app.post('/api/upload-media', upload.single('media'), (req, res) => {
     }
     
     try {
+        // Validate file type
+        const allowedTypes = ['image/', 'video/', 'application/pdf'];
+        if (!allowedTypes.some(t => req.file.mimetype.startsWith(t))) {
+            return res.status(400).json({ error: 'Unsupported media type. Only images, videos, and PDFs are allowed.' });
+        }
+        
+        // Validate file size (100MB max)
+        if (req.file.size > 100 * 1024 * 1024) {
+            return res.status(400).json({ error: 'File too large. Maximum size is 100MB.' });
+        }
+        
         // Generate a unique filename
         const timestamp = Date.now();
         const originalName = req.file.originalname;
         const extension = originalName.split('.').pop();
         const filename = `bulk-media-${timestamp}.${extension}`;
         
+        // Ensure the message-templates directory exists
+        const messageTemplatesDir = path.join(__dirname, 'public', 'message-templates');
+        if (!fs.existsSync(messageTemplatesDir)) {
+            fs.mkdirSync(messageTemplatesDir, { recursive: true });
+        }
+        
         // Move file to public directory
-        const publicPath = path.join(__dirname, 'public', 'message-templates', filename);
+        const publicPath = path.join(messageTemplatesDir, filename);
         fs.renameSync(req.file.path, publicPath);
         
         // Return the public URL
         const publicUrl = `/message-templates/${filename}`;
+        console.log(`[UPLOAD] Media uploaded successfully: ${filename} (${req.file.size} bytes)`);
         res.json({ url: publicUrl, filename: filename });
     } catch (err) {
         console.error('Media upload error:', err);
-        res.status(500).json({ error: 'Failed to upload media' });
+        
+        // Clean up temp file if it exists
+        if (req.file && req.file.path && fs.existsSync(req.file.path)) {
+            try {
+                fs.unlinkSync(req.file.path);
+            } catch (cleanupErr) {
+                console.error('Failed to cleanup temp file:', cleanupErr);
+            }
+        }
+        
+        res.status(500).json({ error: 'Failed to upload media: ' + err.message });
     }
 });
 
@@ -1110,7 +1523,7 @@ app.get('/api/channels/:id/messages', async (req, res) => {
     }
 });
 // Send message to a channel (if admin)
-app.post('/api/channels/:id/send', upload.single('media'), async (req, res) => {
+app.post('/api/channels/:id/send', messageUpload.single('media'), async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
     try {
         const channel = await client.getChatById(req.params.id);
@@ -1143,7 +1556,7 @@ app.post('/api/channels/:id/send', upload.single('media'), async (req, res) => {
 });
 
 // Send message to all channels or specific channel
-app.post('/api/channels/send', upload.single('media'), async (req, res) => {
+app.post('/api/channels/send', messageUpload.single('media'), async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
     try {
         const { channelId, message, sendToAll } = req.body;
@@ -1250,7 +1663,7 @@ app.get('/api/templates', (req, res) => {
 });
 
 // Create new template
-app.post('/api/templates', upload.single('media'), (req, res) => {
+app.post('/api/templates', templateUpload.single('media'), (req, res) => {
     try {
         const { name, text, removeMedia } = req.body;
         if (!name || !text) {
@@ -1291,7 +1704,7 @@ app.post('/api/templates', upload.single('media'), (req, res) => {
 });
 
 // Update existing template
-app.put('/api/templates/:id', upload.single('media'), (req, res) => {
+app.put('/api/templates/:id', templateUpload.single('media'), (req, res) => {
     try {
         const { id } = req.params;
         const { name, text, removeMedia } = req.body;
@@ -1386,7 +1799,7 @@ app.get('/api/messages/log', (req, res) => {
 });
 
 // Send message (with optional media)
-app.post('/api/messages/send', upload.single('media'), async (req, res) => {
+app.post('/api/messages/send', messageUpload.single('media'), async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
     
     const number = req.body?.number;
@@ -1467,7 +1880,7 @@ app.get('/api/bulk', (req, res) => {
 });
 
 // Import bulk messages from CSV
-app.post('/api/bulk-import', upload.single('csv'), (req, res) => {
+app.post('/api/bulk-import', csvUpload.single('csv'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded' });
     
     try {
@@ -1617,7 +2030,7 @@ app.post('/api/bulk-cancel/:filename', (req, res) => {
 });
 
 // Legacy bulk import endpoint (used by old code)
-app.post('/api/bulk/import', upload.single('csv'), (req, res) => {
+app.post('/api/bulk/import', csvUpload.single('csv'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded' });
     
     try {
@@ -1776,6 +2189,54 @@ app.get('/api/time', (req, res) => {
     });
 });
 
+// Periodic disk space check and cleanup (every 30 minutes)
+setInterval(() => {
+    checkDiskSpace();
+}, 30 * 60 * 1000); // 30 minutes
+
+// Periodic temp files cleanup (every 6 hours)
+setInterval(() => {
+    cleanupTempFiles();
+}, 6 * 60 * 60 * 1000); // 6 hours
+
+// Initial disk space check on startup
+setTimeout(() => {
+    checkDiskSpace();
+}, 10000); // Check after 10 seconds
+
+// Graceful shutdown handling
+process.on('SIGINT', async () => {
+    console.log('\n[SHUTDOWN] Received SIGINT, shutting down gracefully...');
+    try {
+        if (client.pupPage && !client.pupPage.isClosed()) {
+            await client.pupPage.close();
+        }
+        if (client.pupBrowser && !client.pupBrowser.isClosed()) {
+            await client.pupBrowser.close();
+        }
+        console.log('[SHUTDOWN] Browser closed successfully');
+    } catch (err) {
+        console.error('[SHUTDOWN] Error closing browser:', err.message);
+    }
+    process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+    console.log('\n[SHUTDOWN] Received SIGTERM, shutting down gracefully...');
+    try {
+        if (client.pupPage && !client.pupPage.isClosed()) {
+            await client.pupPage.close();
+        }
+        if (client.pupBrowser && !client.pupBrowser.isClosed()) {
+            await client.pupBrowser.close();
+        }
+        console.log('[SHUTDOWN] Browser closed successfully');
+    } catch (err) {
+        console.error('[SHUTDOWN] Error closing browser:', err.message);
+    }
+    process.exit(0);
+});
+
 // Start the Express server
 app.listen(PORT, () => {
   console.log(`WhatsApp Web Control Server running at http://localhost:${PORT}`);
@@ -1790,3 +2251,140 @@ app.get('/api/detected-channels', (req, res) => {
         res.status(500).json({ error: 'Failed to fetch detected channels', details: err.message });
     }
 });
+
+// Get leads data
+app.get('/api/leads', (req, res) => {
+    try {
+        const leadsData = readJson(LEADS_FILE);
+        res.json(leadsData);
+    } catch (err) {
+        console.error('Failed to fetch leads:', err);
+        res.status(500).json({ error: 'Failed to fetch leads', details: err.message });
+    }
+});
+
+// Save leads data
+app.post('/api/leads', (req, res) => {
+    try {
+        const { leads } = req.body;
+        if (!leads || !Array.isArray(leads)) {
+            return res.status(400).json({ error: 'Invalid leads data' });
+        }
+        
+        // Ensure we don't exceed 200 records
+        const limitedLeads = leads.slice(0, 200);
+        
+        writeJson(LEADS_FILE, { leads: limitedLeads });
+        res.json({ success: true, count: limitedLeads.length });
+    } catch (err) {
+        console.error('Failed to save leads:', err);
+        res.status(500).json({ error: 'Failed to save leads', details: err.message });
+    }
+});
+
+// Get leads auto chat configuration
+app.get('/api/leads/config', (req, res) => {
+    try {
+        const config = readJson(LEADS_CONFIG_FILE, {
+            enabled: false,
+            systemPrompt: '',
+            includeJsonContext: true,
+            autoReply: false,
+            autoReplyPrompt: ''
+        });
+        res.json(config);
+    } catch (err) {
+        console.error('Failed to load leads config:', err);
+        res.status(500).json({ error: 'Failed to load leads config', details: err.message });
+    }
+});
+
+// Save leads auto chat configuration
+app.post('/api/leads/config', (req, res) => {
+    try {
+        const { enabled, systemPrompt, includeJsonContext, autoReply, autoReplyPrompt } = req.body;
+        
+        const config = {
+            enabled: Boolean(enabled),
+            systemPrompt: systemPrompt || '',
+            includeJsonContext: Boolean(includeJsonContext),
+            autoReply: Boolean(autoReply),
+            autoReplyPrompt: autoReplyPrompt || ''
+        };
+        
+        writeJson(LEADS_CONFIG_FILE, config);
+        console.log('Leads auto chat config saved:', config);
+        res.json({ success: true, config });
+    } catch (err) {
+        console.error('Failed to save leads config:', err);
+        res.status(500).json({ error: 'Failed to save leads config', details: err.message });
+    }
+});
+
+// Gemini API endpoint for leads auto chat
+app.post('/api/gemini/chat', async (req, res) => {
+    try {
+        const { systemPrompt, context, lead, autoReply, autoReplyPrompt, chatHistory } = req.body;
+        
+        if (!systemPrompt) {
+            return res.status(400).json({ error: 'System prompt is required' });
+        }
+
+        let fullPrompt = systemPrompt;
+        
+        if (context) {
+            fullPrompt += `\n\nLead Context:\n${context}`;
+        }
+        
+        if (chatHistory) {
+            fullPrompt += `\n\nChat History:\n${chatHistory}`;
+        }
+        
+        if (autoReply && autoReplyPrompt) {
+            fullPrompt += `\n\nAuto Reply Instructions:\n${autoReplyPrompt}`;
+        }
+
+        const response = await callGenAI({
+            systemPrompt: fullPrompt,
+            autoReplyPrompt: autoReplyPrompt || '',
+            chatHistory: chatHistory || '',
+            userMessage: `Generate a response for lead: ${lead.name} (${lead.mobile})`
+        });
+
+        res.json({ success: true, response });
+    } catch (err) {
+        console.error('Gemini chat error:', err);
+        res.status(500).json({ error: 'Failed to generate response', details: err.message });
+    }
+});
+
+// Proxy endpoint for external leads API (to avoid CORS issues)
+app.post('/api/proxy/leads', async (req, res) => {
+    try {
+        const apiUrl = 'https://dashboard.geosquare.in/api/get_registrations';
+        const apiKey = 'GEOREG25URSECRET';
+
+        const response = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ apikey: apiKey })
+        });
+
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const data = await response.json();
+        res.json(data);
+    } catch (err) {
+        console.error('Proxy leads API error:', err);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to fetch leads from external API', 
+            details: err.message 
+        });
+    }
+});
+

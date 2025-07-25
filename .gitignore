@@ -98,3 +98,6 @@ sample_bulk_import*.csv
 *.backup
 *.bak
 *~
+
+# Temporary files
+temp/

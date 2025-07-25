@@ -17,6 +17,7 @@ const chatSendForm = document.getElementById('chat-send-form');
 const chatMessageText = document.getElementById('chat-message-text');
 const chatAttachment = document.getElementById('chat-attachment');
 const refreshChatsBtn = document.getElementById('refresh-chats-btn');
+const chatSearch = document.getElementById('chat-search');
 
 
 
@@ -98,6 +99,11 @@ document.addEventListener('DOMContentLoaded', () => {
         refreshChatsBtn.addEventListener('click', () => {
             loadChats();
         });
+    }
+
+    // Chat search functionality
+    if (chatSearch) {
+        chatSearch.addEventListener('input', filterChats);
     }
 
     // Load templates when chats tab is clicked
@@ -299,12 +305,22 @@ function renderChatList() {
     chatList.innerHTML = '';
     chats.forEach(chat => {
         const chatItem = document.createElement('div');
-        chatItem.className = 'px-4 py-3 cursor-pointer hover:bg-green-50 flex items-center gap-2' + (chat.id === selectedChatId ? ' bg-green-100' : '');
+        chatItem.className = 'chat-item px-4 py-3 cursor-pointer hover:bg-green-50 flex items-center gap-2' + (chat.id === selectedChatId ? ' bg-green-100' : '');
         chatItem.dataset.chatId = chat.id;
+        
+        // Extract phone number from chat ID for private chats
+        let phoneNumber = '';
+        if (!chat.isGroup && chat.id.includes('@c.us')) {
+            phoneNumber = chat.id.replace('@c.us', '');
+        }
+        
         chatItem.innerHTML = `
             <div class="flex-1 truncate">
-                <div class="font-semibold truncate">${escapeHtml(chat.name)}</div>
-                <div class="text-xs text-gray-500">${chat.isGroup ? 'Group' : 'Private'}</div>
+                <div class="chat-name font-semibold truncate">${escapeHtml(chat.name)}</div>
+                <div class="text-xs text-gray-500">
+                    ${chat.isGroup ? 'Group' : 'Private'}
+                    ${phoneNumber ? `<span class="chat-number ml-1">(${phoneNumber})</span>` : ''}
+                </div>
             </div>
             ${chat.unreadCount > 0 ? `<span class="ml-2 bg-green-600 text-white text-xs rounded-full px-2 py-0.5">${chat.unreadCount}</span>` : ''}
         `;
@@ -377,6 +393,149 @@ function selectChat(chatId) {
     loadMessages(chatId);
     // After selecting a chat, repopulate templates
     populateChatTemplateSelect();
+}
+
+// Filter chats based on search input
+function filterChats() {
+    const searchTerm = chatSearch.value.toLowerCase().trim();
+    const chatItems = document.querySelectorAll('.chat-item');
+    
+    chatItems.forEach(item => {
+        const chatName = item.querySelector('.chat-name').textContent.toLowerCase();
+        const chatNumber = item.querySelector('.chat-number')?.textContent.toLowerCase() || '';
+        
+        if (chatName.includes(searchTerm) || chatNumber.includes(searchTerm)) {
+            item.style.display = 'block';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+}
+
+// Open chat by phone number (for leads integration)
+window.openChatByNumber = function(phoneNumber) {
+    console.log('Opening chat for number:', phoneNumber);
+    
+    // Navigate to chats tab first
+    const chatsTab = document.getElementById('chats-tab');
+    if (chatsTab) {
+        chatsTab.click();
+        
+        // Wait for chats to load, then find and select
+        setTimeout(() => {
+            // First, try to find existing chat by phone number
+            const existingChat = findChatByPhoneNumber(phoneNumber);
+            
+            if (existingChat) {
+                console.log('Found existing chat:', existingChat);
+                selectChat(existingChat.id);
+            } else {
+                console.log('No existing chat found, will start new chat');
+                // No existing chat found, prepare to start new chat
+                startNewChat(phoneNumber);
+            }
+        }, 1000);
+    }
+};
+
+// Find chat by phone number in the loaded chats array
+function findChatByPhoneNumber(phoneNumber) {
+    if (!chats || chats.length === 0) {
+        console.log('No chats loaded yet');
+        return null;
+    }
+    
+    console.log(`Searching for chat with phone number: ${phoneNumber}`);
+    console.log(`Total chats loaded: ${chats.length}`);
+    
+    // Look for private chats (not groups) with matching phone number
+    const matchingChat = chats.find(chat => {
+        if (chat.isGroup) {
+            console.log(`Skipping group chat: ${chat.name}`);
+            return false; // Skip groups
+        }
+        
+        console.log(`Checking chat: ${chat.name} (ID: ${chat.id})`);
+        
+        // Check if chat ID contains the phone number
+        if (chat.id.includes(phoneNumber)) {
+            console.log(`Found match by chat ID: ${chat.id}`);
+            return true;
+        }
+        
+        // Also check if chat ID contains the number with @c.us suffix
+        if (chat.id.includes(phoneNumber + '@c.us')) {
+            console.log(`Found match by chat ID with @c.us: ${chat.id}`);
+            return true;
+        }
+        
+        // Check if the phone number is in the chat name (for saved contacts)
+        if (chat.name && chat.name.includes(phoneNumber)) {
+            console.log(`Found match by chat name: ${chat.name}`);
+            return true;
+        }
+        
+        return false;
+    });
+    
+    if (matchingChat) {
+        console.log(`Found matching chat: ${matchingChat.name} (${matchingChat.id})`);
+    } else {
+        console.log(`No matching chat found for ${phoneNumber}`);
+    }
+    
+    return matchingChat || null;
+}
+
+// Start a new chat with a phone number
+function startNewChat(phoneNumber) {
+    console.log('Starting new chat with:', phoneNumber);
+    
+    // Clear any existing search
+    if (chatSearch) {
+        chatSearch.value = '';
+        chatSearch.dispatchEvent(new Event('input'));
+    }
+    
+    // Update chat header to show new chat
+    const chatHeader = document.getElementById('chat-header');
+    if (chatHeader) {
+        chatHeader.innerHTML = `
+            <div class="flex items-center justify-between w-full">
+                <h5 class="mb-0">New Chat: ${phoneNumber}</h5>
+                <span class="text-xs text-gray-500">Send first message to start chat</span>
+            </div>
+        `;
+    }
+    
+    // Clear message container
+    const messageContainer = document.getElementById('message-container');
+    if (messageContainer) {
+        messageContainer.innerHTML = `
+            <div class="text-center py-8 text-gray-500">
+                <div class="text-4xl mb-4">💬</div>
+                <div class="text-lg font-medium">New Chat</div>
+                <div class="text-sm">Send a message to ${phoneNumber} to start the conversation</div>
+            </div>
+        `;
+    }
+    
+    // Set the current chat ID to indicate we're in a new chat
+    selectedChatId = `new-${phoneNumber}`;
+    
+    // Focus on the message input
+    const chatMessageText = document.getElementById('chat-message-text');
+    if (chatMessageText) {
+        chatMessageText.focus();
+        chatMessageText.placeholder = `Type a message to ${phoneNumber}...`;
+    }
+    
+    // Update the send form to handle new chat
+    const chatSendForm = document.getElementById('chat-send-form');
+    if (chatSendForm) {
+        // Store the phone number for sending
+        chatSendForm.dataset.newChatNumber = phoneNumber;
+    }
 }
 
 // Load messages for a chat
@@ -561,10 +720,7 @@ function handleSendMessage(event) {
 // Handle chat send message form submission
 function handleChatSendMessage(event) {
     event.preventDefault();
-    if (!selectedChatId) {
-        alert('Please select a chat to send a message.');
-        return;
-    }
+    
     let message = chatMessageText.value.trim();
     let mediaFile = chatAttachment.files[0];
 
@@ -597,16 +753,33 @@ function handleChatSendMessage(event) {
         alert('Please enter a message or attach a file or select a template.');
         return;
     }
+    
+    // Check if this is a new chat
+    let targetNumber = selectedChatId;
+    if (selectedChatId && selectedChatId.startsWith('new-')) {
+        // This is a new chat, get the phone number from the form data
+        targetNumber = chatSendForm.dataset.newChatNumber;
+        if (!targetNumber) {
+            alert('Error: Phone number not found for new chat.');
+            return;
+        }
+    } else if (!selectedChatId) {
+        alert('Please select a chat to send a message.');
+        return;
+    }
+    
     chatSendForm.querySelector('button[type="submit"]').disabled = true;
+    
     // Prepare form data
     const formData = new FormData();
-    formData.append('number', selectedChatId);
+    formData.append('number', targetNumber);
     formData.append('message', message);
     if (mediaFile) {
         formData.append('media', mediaFile);
     } else if (useTemplateMedia && templateMedia) {
         formData.append('media_path', templateMedia); // Backend should handle media_path
     }
+    
     fetch('/api/messages/send', {
         method: 'POST',
         body: formData
@@ -616,7 +789,34 @@ function handleChatSendMessage(event) {
         chatMessageText.value = '';
         chatAttachment.value = '';
         clearChatTabMediaPreview();
-        loadMessages(selectedChatId);
+        
+        // If this was a new chat, refresh the chat list to show the new chat
+        if (selectedChatId && selectedChatId.startsWith('new-')) {
+            console.log('New chat message sent, refreshing chat list...');
+            loadChats();
+            // Clear the new chat state
+            selectedChatId = null;
+            chatSendForm.dataset.newChatNumber = '';
+            
+            // Reset the chat header and message container
+            const chatHeader = document.getElementById('chat-header');
+            if (chatHeader) {
+                chatHeader.innerHTML = '<h5 class="mb-0">Select a chat</h5>';
+            }
+            
+            const messageContainer = document.getElementById('message-container');
+            if (messageContainer) {
+                messageContainer.innerHTML = '';
+            }
+            
+            // Reset placeholder
+            if (chatMessageText) {
+                chatMessageText.placeholder = 'Type a message...';
+            }
+        } else {
+            // Existing chat, just reload messages
+            loadMessages(selectedChatId);
+        }
     })
     .catch(err => {
         alert('Failed to send message: ' + err.message);

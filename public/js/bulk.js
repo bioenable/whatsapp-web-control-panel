@@ -33,6 +33,15 @@
     const bulkPreviewSection = document.getElementById('bulk-preview-section');
     const bulkPreviewContent = document.getElementById('bulk-preview-content');
     const cancelBulkForm = document.getElementById('cancel-bulk-form');
+    
+    // New delay and unique code elements
+    const fixedDelayRadio = document.getElementById('fixed-delay');
+    const randomDelayRadio = document.getElementById('random-delay');
+    const fixedDelaySection = document.getElementById('fixed-delay-section');
+    const randomDelaySection = document.getElementById('random-delay-section');
+    const bulkDelayMin = document.getElementById('bulk-delay-min');
+    const bulkDelayMax = document.getElementById('bulk-delay-max');
+    const addUniqueCodeCheckbox = document.getElementById('add-unique-code');
 
     // Bulk Tab State Variables
     let bulkRecords = [];
@@ -97,6 +106,30 @@
         // Bulk Form Event Listeners
         if (bulkFormBtn) {
             bulkFormBtn.addEventListener('click', openBulkForm);
+        }
+        
+        // Delay type radio button listeners
+        if (fixedDelayRadio) {
+            fixedDelayRadio.addEventListener('change', toggleDelaySections);
+        }
+        if (randomDelayRadio) {
+            randomDelayRadio.addEventListener('change', toggleDelaySections);
+        }
+        
+        // Unique code checkbox listener
+        if (addUniqueCodeCheckbox) {
+            addUniqueCodeCheckbox.addEventListener('change', updateBulkScheduleSummary);
+        }
+        
+        // Delay input listeners for summary updates
+        if (bulkDelay) {
+            bulkDelay.addEventListener('input', updateBulkScheduleSummary);
+        }
+        if (bulkDelayMin) {
+            bulkDelayMin.addEventListener('input', updateBulkScheduleSummary);
+        }
+        if (bulkDelayMax) {
+            bulkDelayMax.addEventListener('input', updateBulkScheduleSummary);
         }
         
         if (closeBulkFormModal) {
@@ -482,6 +515,34 @@
         }
     }
     
+    // Toggle between fixed and random delay sections
+    function toggleDelaySections() {
+        if (fixedDelayRadio && fixedDelayRadio.checked) {
+            fixedDelaySection.classList.remove('hidden');
+            randomDelaySection.classList.add('hidden');
+            bulkDelay.required = true;
+            bulkDelayMin.required = false;
+            bulkDelayMax.required = false;
+        } else if (randomDelayRadio && randomDelayRadio.checked) {
+            fixedDelaySection.classList.add('hidden');
+            randomDelaySection.classList.remove('hidden');
+            bulkDelay.required = false;
+            bulkDelayMin.required = true;
+            bulkDelayMax.required = true;
+        }
+        updateBulkScheduleSummary();
+    }
+    
+    // Generate random 4-character alphanumeric code
+    function generateUniqueCode() {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+        let result = '';
+        for (let i = 0; i < 4; i++) {
+            result += chars.charAt(Math.floor(Math.random() * chars.length));
+        }
+        return result;
+    }
+    
     function updateBulkFormCounts() {
         if (!bulkNumbers) return;
         
@@ -525,14 +586,26 @@
     }
     
     function updateBulkScheduleSummary() {
-        if (!bulkNumbers || !bulkDelay || !bulkStartDatetime) return;
+        if (!bulkNumbers || !bulkStartDatetime) return;
         
         const numbers = parsePhoneNumbers(bulkNumbers.value);
-        const delay = parseInt(bulkDelay.value) || 1;
         const startTime = new Date(bulkStartDatetime.value);
         
         const totalNumbers = numbers.length;
-        const totalDelay = (totalNumbers - 1) * delay; // No delay for first message
+        let totalDelay = 0;
+        
+        // Calculate delay based on selected type
+        if (fixedDelayRadio && fixedDelayRadio.checked) {
+            const delay = parseInt(bulkDelay.value) || 1;
+            totalDelay = (totalNumbers - 1) * delay; // No delay for first message
+        } else if (randomDelayRadio && randomDelayRadio.checked) {
+            const minDelay = parseInt(bulkDelayMin.value) || 1;
+            const maxDelay = parseInt(bulkDelayMax.value) || 5;
+            // Calculate average delay for estimation
+            const avgDelay = (minDelay + maxDelay) / 2;
+            totalDelay = (totalNumbers - 1) * avgDelay;
+        }
+        
         const endTime = new Date(startTime.getTime() + totalDelay * 1000);
         
         const summaryCount = document.getElementById('summary-count');
@@ -546,7 +619,13 @@
         if (summaryDuration) {
             const minutes = Math.floor(totalDelay / 60);
             const seconds = totalDelay % 60;
-            summaryDuration.textContent = `${minutes}m ${seconds}s`;
+            if (randomDelayRadio && randomDelayRadio.checked) {
+                const minDelay = parseInt(bulkDelayMin.value) || 1;
+                const maxDelay = parseInt(bulkDelayMax.value) || 5;
+                summaryDuration.textContent = `${minutes}m ${seconds}s (random ${minDelay}-${maxDelay}s)`;
+            } else {
+                summaryDuration.textContent = `${minutes}m ${seconds}s`;
+            }
         }
         
         if (summaryEndTime) {
@@ -581,8 +660,14 @@
     function showBulkPreview() {
         if (!bulkMessage || !bulkPreviewContent) return;
         
-        const message = bulkMessage.value;
+        let message = bulkMessage.value;
         const mediaFile = bulkMedia.files[0];
+        
+        // Add unique code if enabled
+        if (addUniqueCodeCheckbox && addUniqueCodeCheckbox.checked) {
+            const uniqueCode = generateUniqueCode();
+            message += ` ${uniqueCode}`;
+        }
         
         let previewHtml = '<div class="max-w-sm mx-auto bg-white rounded-lg shadow-lg p-4">';
         previewHtml += '<div class="flex items-center mb-3">';
@@ -616,13 +701,37 @@
     function handleBulkScheduleSubmit(e) {
         e.preventDefault();
         
-        if (!bulkNumbers || !bulkMessage || !bulkStartDatetime || !bulkDelay) return;
+        if (!bulkNumbers || !bulkMessage || !bulkStartDatetime) return;
         
         const numbers = parsePhoneNumbers(bulkNumbers.value);
-        const message = bulkMessage.value.trim();
+        let message = bulkMessage.value.trim();
         const startDatetime = bulkStartDatetime.value;
-        const delay = parseInt(bulkDelay.value);
         const mediaFile = bulkMedia.files[0];
+        
+        // Get delay configuration
+        let delayConfig = {};
+        if (fixedDelayRadio && fixedDelayRadio.checked) {
+            const delay = parseInt(bulkDelay.value);
+            if (!delay || delay < 1) {
+                alert('Please enter a valid fixed delay (minimum 1 second).');
+                return;
+            }
+            delayConfig = { type: 'fixed', value: delay };
+        } else if (randomDelayRadio && randomDelayRadio.checked) {
+            const minDelay = parseInt(bulkDelayMin.value);
+            const maxDelay = parseInt(bulkDelayMax.value);
+            if (!minDelay || !maxDelay || minDelay < 1 || maxDelay < minDelay) {
+                alert('Please enter valid random delay values (min must be >= 1, max must be >= min).');
+                return;
+            }
+            delayConfig = { type: 'random', min: minDelay, max: maxDelay };
+        } else {
+            alert('Please select a delay type.');
+            return;
+        }
+        
+        // Add unique code if enabled
+        const addUniqueCode = addUniqueCodeCheckbox && addUniqueCodeCheckbox.checked;
         
         // Handle media file upload first if present
         let mediaUrl = '';
@@ -641,17 +750,17 @@
                     throw new Error('Media upload failed: ' + data.error);
                 }
                 mediaUrl = data.url;
-                return createAndSubmitBulkSchedule(numbers, message, startDatetime, delay, mediaUrl);
+                return createAndSubmitBulkSchedule(numbers, message, startDatetime, delayConfig, mediaUrl, addUniqueCode);
             })
             .catch(err => {
                 alert('Failed to upload media: ' + err.message);
             });
         } else {
-            return createAndSubmitBulkSchedule(numbers, message, startDatetime, delay, '');
+            return createAndSubmitBulkSchedule(numbers, message, startDatetime, delayConfig, '', addUniqueCode);
         }
     }
     
-    function createAndSubmitBulkSchedule(numbers, message, startDatetime, delay, mediaUrl) {
+    function createAndSubmitBulkSchedule(numbers, message, startDatetime, delayConfig, mediaUrl, addUniqueCode) {
         
         // Validation
         if (numbers.length === 0) {
@@ -679,13 +788,21 @@
             return;
         }
         
-        if (delay < 1 || delay > 3600) {
-            alert('Delay must be between 1 and 3600 seconds.');
-            return;
+        // Validate delay config
+        if (delayConfig.type === 'fixed') {
+            if (delayConfig.value < 1 || delayConfig.value > 3600) {
+                alert('Fixed delay must be between 1 and 3600 seconds.');
+                return;
+            }
+        } else if (delayConfig.type === 'random') {
+            if (delayConfig.min < 1 || delayConfig.max > 3600 || delayConfig.min > delayConfig.max) {
+                alert('Random delay values must be between 1 and 3600 seconds, with min <= max.');
+                return;
+            }
         }
         
         // Create CSV content
-        const csvContent = createBulkCsvContent(numbers, message, startDatetime, delay, mediaUrl);
+        const csvContent = createBulkCsvContent(numbers, message, startDatetime, delayConfig, mediaUrl, addUniqueCode);
         
         // Create form data for upload
         const formData = new FormData();
@@ -728,15 +845,53 @@
         });
     }
     
-    function createBulkCsvContent(numbers, message, startDatetime, delay, mediaUrl = '') {
+    function createBulkCsvContent(numbers, message, startDatetime, delayConfig, mediaUrl = '', addUniqueCode = false) {
         const startTime = new Date(startDatetime);
         let csv = 'number,message,media,send_datetime\n';
         
         numbers.forEach((number, index) => {
-            const messageTime = new Date(startTime.getTime() + index * delay * 1000);
+            let currentMessage = message;
+            
+            // Add unique code if enabled
+            if (addUniqueCode) {
+                const uniqueCode = generateUniqueCode();
+                currentMessage += ` ${uniqueCode}`;
+            }
+            
+            // Calculate delay for this message
+            let delay;
+            if (delayConfig.type === 'fixed') {
+                delay = delayConfig.value;
+            } else if (delayConfig.type === 'random') {
+                // Generate random delay between min and max
+                delay = Math.floor(Math.random() * (delayConfig.max - delayConfig.min + 1)) + delayConfig.min;
+            } else {
+                delay = 1; // fallback
+            }
+            
+            // Calculate message time (accumulate delays)
+            let messageTime;
+            if (index === 0) {
+                messageTime = startTime;
+            } else {
+                // For random delays, we need to calculate cumulative delay
+                let totalDelay = 0;
+                for (let i = 0; i < index; i++) {
+                    if (delayConfig.type === 'fixed') {
+                        totalDelay += delayConfig.value;
+                    } else if (delayConfig.type === 'random') {
+                        // Generate consistent random delay for this position
+                        const seed = `${startDatetime}-${i}`;
+                        const randomDelay = Math.floor(Math.random() * (delayConfig.max - delayConfig.min + 1)) + delayConfig.min;
+                        totalDelay += randomDelay;
+                    }
+                }
+                messageTime = new Date(startTime.getTime() + totalDelay * 1000);
+            }
+            
             const formattedTime = messageTime.toLocaleString('sv-SE', { timeZone: bulkTimezone }).replace(' ', 'T');
             
-            csv += `"${number}","${message.replace(/"/g, '""')}","${mediaUrl}",${formattedTime}\n`;
+            csv += `"${number}","${currentMessage.replace(/"/g, '""')}","${mediaUrl}",${formattedTime}\n`;
         });
         
         return csv;

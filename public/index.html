@@ -74,6 +74,11 @@
                         Automate
                     </button>
                 </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="leads-tab" data-tab="leads" type="button" role="tab" aria-controls="leads" aria-selected="false">
+                        Leads
+                    </button>
+                </li>
             </ul>
             <div id="tab-content">
                 <div id="chats" class="tab-pane">
@@ -83,6 +88,9 @@
                             <div class="flex justify-between items-center p-2 border-b">
                                 <span class="font-semibold">Chats</span>
                                 <button id="refresh-chats-btn" class="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-xs">Refresh</button>
+                            </div>
+                            <div class="p-2 border-b">
+                                <input type="text" id="chat-search" class="w-full border rounded px-2 py-1 text-sm" placeholder="Search chats by name or number...">
                             </div>
                             <div id="chat-list" class="divide-y"></div>
                         </div>
@@ -316,9 +324,44 @@
                                         </div>
                                         
                                         <div>
-                                            <label class="block text-sm font-medium mb-2">Delay Between Messages (seconds)</label>
-                                            <input type="number" id="bulk-delay" class="w-full border rounded px-3 py-2" min="1" max="3600" value="1" required>
-                                            <div class="text-xs text-gray-500 mt-1">Minimum 1 second, maximum 3600 seconds (1 hour)</div>
+                                            <label class="block text-sm font-medium mb-2">Delay Between Messages</label>
+                                            <div class="space-y-2">
+                                                <div class="flex items-center space-x-2">
+                                                    <input type="radio" id="fixed-delay" name="delay-type" value="fixed" checked class="mr-1">
+                                                    <label for="fixed-delay" class="text-sm">Fixed Delay</label>
+                                                </div>
+                                                <div class="flex items-center space-x-2">
+                                                    <input type="radio" id="random-delay" name="delay-type" value="random" class="mr-1">
+                                                    <label for="random-delay" class="text-sm">Random Delay</label>
+                                                </div>
+                                            </div>
+                                            
+                                            <!-- Fixed Delay Input -->
+                                            <div id="fixed-delay-section">
+                                                <input type="number" id="bulk-delay" class="w-full border rounded px-3 py-2 mt-2" min="1" max="3600" value="1" required>
+                                                <div class="text-xs text-gray-500 mt-1">Fixed delay in seconds (1-3600)</div>
+                                            </div>
+                                            
+                                            <!-- Random Delay Inputs -->
+                                            <div id="random-delay-section" class="hidden space-y-2 mt-2">
+                                                <div class="flex items-center space-x-2">
+                                                    <input type="number" id="bulk-delay-min" class="flex-1 border rounded px-3 py-2" min="1" max="3600" placeholder="Min seconds" value="1">
+                                                    <span class="text-sm">to</span>
+                                                    <input type="number" id="bulk-delay-max" class="flex-1 border rounded px-3 py-2" min="1" max="3600" placeholder="Max seconds" value="5">
+                                                </div>
+                                                <div class="text-xs text-gray-500">Random delay between min and max seconds</div>
+                                            </div>
+                                        </div>
+                                        
+                                        <div>
+                                            <label class="block text-sm font-medium mb-2">Message Options</label>
+                                            <div class="space-y-2">
+                                                <div class="flex items-center space-x-2">
+                                                    <input type="checkbox" id="add-unique-code" class="mr-2">
+                                                    <label for="add-unique-code" class="text-sm">Add unique 4-character code to each message</label>
+                                                </div>
+                                                <div class="text-xs text-gray-500">Adds a random 4-character alphanumeric code at the end of each message to make them unique</div>
+                                            </div>
                                         </div>
                                         
                                         <div class="bg-gray-50 p-4 rounded border">
@@ -611,6 +654,114 @@
                         </div>
                     </div>
                 </div>
+                <div id="leads" class="tab-pane hidden">
+                    <div class="bg-white rounded shadow p-6">
+                        <div class="flex items-center justify-between mb-6">
+                            <div>
+                                <h2 class="text-xl font-semibold">Leads Management</h2>
+                                <p class="text-gray-600 text-sm">Manage and track leads from website registrations and inquiries</p>
+                            </div>
+                            <div class="flex items-center space-x-3">
+                                <div class="flex items-center space-x-2">
+                                    <label class="flex items-center">
+                                        <input type="checkbox" id="leads-auto-chat-toggle" class="mr-2">
+                                        <span class="text-sm font-medium">Auto Chat with New Lead</span>
+                                    </label>
+                                    <button id="leads-auto-chat-config-btn" class="text-blue-600 hover:text-blue-800 text-sm">
+                                        Configure
+                                    </button>
+                                </div>
+                                <button id="leads-refresh-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm">
+                                    Refresh
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="flex items-center justify-between mb-4">
+                            <div class="flex items-center space-x-4">
+                                <div class="text-sm text-gray-600" id="leads-count">0 leads</div>
+                                <div class="flex items-center space-x-2">
+                                    <input type="text" id="leads-search" placeholder="Search leads..." 
+                                           class="border rounded px-3 py-1 text-sm w-64">
+                                    <select id="leads-filter" class="border rounded px-3 py-1 text-sm">
+                                        <option value="all">All Types</option>
+                                        <option value="Registration">Registration</option>
+                                        <option value="Inquiry">Inquiry</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="leads-list-container" class="overflow-x-auto">
+                            <table class="min-w-full bg-white rounded shadow">
+                                <thead>
+                                    <tr class="bg-gray-50">
+                                        <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Name & Email</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Mobile & Chat</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Inquiry</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Source</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Created</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Auto Chat</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="leads-list">
+                                    <!-- Leads will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Auto Chat Configuration Modal -->
+                    <div id="leads-auto-chat-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6 relative">
+                            <button id="close-leads-auto-chat-modal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700 text-2xl">&times;</button>
+                            <h3 class="text-lg font-semibold mb-4">Auto Chat Configuration</h3>
+                            <form id="leads-auto-chat-form" class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium mb-1">System Prompt</label>
+                                    <textarea name="systemPrompt" class="w-full border rounded px-3 py-2" rows="4" 
+                                              placeholder="e.g. You are a helpful sales assistant. Your goal is to engage with leads and convert them into customers..."></textarea>
+                                    <div class="text-xs text-gray-500 mt-1">This prompt will be used to generate initial messages for new leads.</div>
+                                </div>
+                                
+                                <div class="flex items-center space-x-2">
+                                    <input type="checkbox" name="includeJsonContext" id="includeJsonContext" class="mr-2">
+                                    <label for="includeJsonContext" class="text-sm font-medium">Include JSON record as context</label>
+                                </div>
+                                
+                                <div class="flex items-center space-x-2">
+                                    <input type="checkbox" name="autoReply" id="autoReply" class="mr-2">
+                                    <label for="autoReply" class="text-sm font-medium">Enable Auto Reply</label>
+                                </div>
+                                
+                                <div id="autoReplySection" class="hidden">
+                                    <label class="block text-sm font-medium mb-1">Auto Reply Additional Prompt</label>
+                                    <textarea name="autoReplyPrompt" class="w-full border rounded px-3 py-2" rows="3" 
+                                              placeholder="e.g. When the customer replies, respond with..."></textarea>
+                                    <div class="text-xs text-gray-500 mt-1">This prompt will be used for auto-replying to customer messages.</div>
+                                </div>
+
+                                <div class="border-t pt-4">
+                                    <h4 class="font-medium mb-2">Test Configuration</h4>
+                                    <div class="flex items-center space-x-2">
+                                        <select id="leads-test-record-select" class="border rounded px-3 py-2 text-sm flex-1">
+                                            <option value="">Select a record to test...</option>
+                                        </select>
+                                        <button type="button" id="leads-test-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                                            Test
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="flex justify-end gap-2 pt-4 border-t">
+                                    <button type="button" id="cancel-leads-auto-chat-btn" class="px-4 py-2 rounded border">Cancel</button>
+                                    <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Save Configuration</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -619,6 +770,7 @@
     <script src="/js/bulk.js"></script>
     <script src="/js/contacts.js"></script>
     <script src="/js/automate.js"></script>
+    <script src="/js/leads.js"></script>
     <script>
       // Simple tab switching logic
       document.querySelectorAll('.tab-link').forEach(btn => {

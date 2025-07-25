@@ -1,33 +1,13 @@
 {
-  "name": "whatsapp-web.js",
-  "version": "1.31.1-alpha.0",
-  "description": "Library for interacting with the WhatsApp Web API ",
-  "main": "./index.js",
-  "typings": "./index.d.ts",
+  "name": "whatsapp-web-control",
+  "version": "1.0.0",
+  "description": "WhatsApp Web Control Server with automation and leads management",
+  "main": "server.js",
   "scripts": {
-    "test": "mocha tests --recursive --timeout 5000",
-    "test-single": "mocha",
-    "shell": "node --experimental-repl-await ./shell.js",
-    "generate-docs": "npx jsdoc --configure .jsdoc.json --verbose"
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/pedroslopez/whatsapp-web.js.git"
-  },
-  "keywords": [
-    "whatsapp",
-    "whatsapp-web",
-    "api",
-    "bot",
-    "client",
-    "node"
-  ],
-  "author": "Pedro Lopez",
-  "license": "Apache-2.0",
-  "bugs": {
-    "url": "https://github.com/pedroslopez/whatsapp-web.js/issues"
-  },
-  "homepage": "https://wwebjs.dev/",
   "dependencies": {
     "@google/genai": "^1.10.0",
     "@pedroslopez/moduleraid": "^5.0.2",
@@ -45,18 +25,6 @@
     "puppeteer": "^24.12.1",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^9.0.0"
-  },
-  "devDependencies": {
-    "@types/node-fetch": "^2.5.12",
-    "chai": "^4.3.4",
-    "chai-as-promised": "^7.1.1",
-    "dotenv": "^16.0.0",
-    "eslint": "^8.4.1",
-    "eslint-plugin-mocha": "^10.0.3",
-    "jsdoc": "^3.6.4",
-    "jsdoc-baseline": "^0.1.5",
-    "mocha": "^11.7.1",
-    "sinon": "^13.0.1"
   },
   "engines": {
     "node": ">=18.0.0"
