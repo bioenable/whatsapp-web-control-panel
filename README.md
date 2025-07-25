@@ -129,6 +129,19 @@ sudo apt-get install -y nodejs
 5. Open your browser to `http://localhost:5014`
 6. Scan the QR code with WhatsApp Web
 
+## Upgrading Existing Installations
+
+### Quick Upgrade (Git Users)
+```bash
+# Run the automatic upgrade script
+./upgrade.sh
+```
+
+### Manual Upgrade
+See [UPGRADE_GUIDE.md](UPGRADE_GUIDE.md) for detailed upgrade instructions.
+
+**Important**: Your data (JSON files, configurations, WhatsApp auth) is automatically preserved during upgrades.
+
 ## Configuration
 
 ### Environment Variables
