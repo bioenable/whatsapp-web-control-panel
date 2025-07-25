@@ -34,10 +34,28 @@ The library works by launching the WhatsApp Web browser application and managing
 - **Bulk Messaging**: Import CSV files and send bulk messages with scheduling
 - **Channel Management**: Comprehensive channel management with multiple fetch methods
 - **AI Automation**: Automated responses using Google GenAI with web search grounding
+- **Leads Management**: Complete leads management system with auto-chat functionality
+- **Auto-Reply System**: Intelligent auto-reply to customer messages with context awareness
+- **Enhanced Logging**: Comprehensive logging with prompts and responses for debugging
 - **Media Support**: Send images, videos, and PDF files
 - **Real-time Status**: Live connection status and QR code authentication
 - **Contact Management**: Live contact fetching and search functionality
 - **Auto File Creation**: Automatic creation of required JSON files with proper structure
+
+## Recent Updates
+
+### v1.32.0 - Enhanced Auto-Reply System
+- ✅ **Individual Lead Auto-Reply**: Auto-reply functionality for leads with auto chat enabled
+- ✅ **Enhanced Logging**: Full prompt and response logging for better debugging
+- ✅ **Context-Aware Responses**: AI responses include lead data, chat history, and system prompts
+- ✅ **Robust Mobile Matching**: Improved mobile number matching for different formats
+- ✅ **Comprehensive Error Handling**: Better error handling and logging for auto-reply failures
+
+### v1.31.0 - Leads Management System
+- ✅ **Complete Leads Management**: Full CRUD operations for leads
+- ✅ **Auto Chat Configuration**: Configurable system prompts and auto-reply settings
+- ✅ **CSV Import/Export**: Bulk import and export of leads data
+- ✅ **Individual Auto Chat**: Per-lead auto chat enable/disable functionality
 
 ## Installation
 
@@ -45,6 +63,34 @@ The library works by launching the WhatsApp Web browser application and managing
 
 - **Node.js v18+** is required
 - Google Chrome (for video sending support)
+
+### Installation Options
+
+#### Option 1: Install from Latest Release (Recommended)
+```bash
+# Download the latest stable release
+wget https://github.com/bioenable/whatsapp-web-control-panel/archive/refs/tags/v1.32.0.zip
+unzip v1.32.0.zip
+cd whatsapp-web-control-panel-1.32.0
+npm install
+```
+
+#### Option 2: Install from Main Branch (Development Version)
+```bash
+# Clone the repository and get the latest development version
+git clone https://github.com/bioenable/whatsapp-web-control-panel.git
+cd whatsapp-web-control-panel
+npm install
+```
+
+#### Option 3: Install Specific Version
+```bash
+# Clone and checkout a specific version
+git clone https://github.com/bioenable/whatsapp-web-control-panel.git
+cd whatsapp-web-control-panel
+git checkout v1.32.0  # or any other version tag
+npm install
+```
 
 ### Quick Steps to Upgrade Node
 
