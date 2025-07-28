@@ -2441,3 +2441,71 @@ app.post('/api/proxy/leads', async (req, res) => {
     }
 });
 
+// Check if contact exists in WhatsApp
+app.post('/api/contacts/check', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    
+    try {
+        const { mobile } = req.body;
+        if (!mobile) {
+            return res.status(400).json({ error: 'Mobile number is required' });
+        }
+
+        // Normalize mobile number
+        const normalizedNumber = mobile.replace(/[^0-9]/g, '');
+        const chatId = normalizedNumber + '@c.us';
+        
+        // Try to get the chat
+        const chat = await client.getChatById(chatId);
+        
+        // If we can get the chat, the contact exists
+        const exists = chat && chat.id;
+        
+        res.json({ exists: !!exists });
+    } catch (err) {
+        // If chat doesn't exist, it will throw an error
+        res.json({ exists: false });
+    }
+});
+
+// Add contact to WhatsApp
+app.post('/api/contacts/add', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    
+    try {
+        const { mobile, name } = req.body;
+        if (!mobile) {
+            return res.status(400).json({ error: 'Mobile number is required' });
+        }
+
+        // Normalize mobile number
+        const normalizedNumber = mobile.replace(/[^0-9]/g, '');
+        const chatId = normalizedNumber + '@c.us';
+        
+        // Check if contact already exists
+        try {
+            const existingChat = await client.getChatById(chatId);
+            if (existingChat) {
+                return res.json({ success: true, message: 'Contact already exists' });
+            }
+        } catch (err) {
+            // Contact doesn't exist, continue to add
+        }
+        
+        // Add contact to WhatsApp
+        await client.addContact({
+            id: chatId,
+            name: name || `Contact ${normalizedNumber}`
+        });
+        
+        res.json({ success: true, message: 'Contact added successfully' });
+    } catch (err) {
+        console.error('Error adding contact:', err);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to add contact', 
+            details: err.message 
+        });
+    }
+});
+

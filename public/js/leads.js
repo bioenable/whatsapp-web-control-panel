@@ -30,6 +30,7 @@
     };
     let lastFetchTime = null;
     let fetchInterval = null;
+    let contactsCache = new Map(); // Cache for contact status
     
     // Initialize Leads Tab
     async function initLeadsTab() {
@@ -96,6 +97,12 @@
         // Test functionality
         if (leadsTestBtn) {
             leadsTestBtn.addEventListener('click', testAutoChat);
+        }
+
+        // Add contacts button
+        const leadsAddContactsBtn = document.getElementById('leads-add-contacts-btn');
+        if (leadsAddContactsBtn) {
+            leadsAddContactsBtn.addEventListener('click', addAllLeadsToContacts);
         }
 
         // Cancel button
@@ -336,7 +343,11 @@
             return;
         }
 
-        leadsList.innerHTML = leadsFilteredData.map(lead => `
+        leadsList.innerHTML = leadsFilteredData.map(lead => {
+            const isInContacts = contactsCache.get(lead.mobile);
+            const contactIconColor = isInContacts ? 'text-green-600' : 'text-red-600';
+            
+            return `
             <tr class="border-b hover:bg-gray-50">
                 <td class="px-3 py-2">
                     <div class="flex items-center">
@@ -356,6 +367,14 @@
                             <button onclick="startChat('${lead.mobile}')" class="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50" title="Start/Open Chat">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                                </svg>
+                            </button>
+                            <button onclick="toggleContactStatus('${lead.mobile}', '${escapeHtml(lead.name)}')" 
+                                    class="contact-status-btn p-1 rounded hover:bg-gray-50" 
+                                    data-mobile="${lead.mobile}"
+                                    title="${isInContacts ? 'Contact exists in WhatsApp' : 'Click to add to WhatsApp contacts'}">
+                                <svg class="w-4 h-4 contact-status-icon ${contactIconColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
                                 </svg>
                             </button>
                         </div>
@@ -426,7 +445,13 @@
                     </div>
                 </td>
             </tr>
-        `).join('');
+        `;
+        }).join('');
+        
+        // Check contact statuses after rendering
+        setTimeout(() => {
+            checkAllContactStatuses();
+        }, 100);
     }
 
     // Toggle individual auto chat for a lead
@@ -1202,6 +1227,159 @@
             clearInterval(fetchInterval);
             fetchInterval = null;
         }
+    }
+
+    // Contact Management Functions
+    async function checkContactStatus(mobile) {
+        try {
+            const response = await fetch('/api/contacts/check', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ mobile })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to check contact status');
+            }
+            
+            const result = await response.json();
+            return result.exists;
+        } catch (err) {
+            console.error('Error checking contact status:', err);
+            return false;
+        }
+    }
+
+    async function addContact(mobile, name = '') {
+        try {
+            const response = await fetch('/api/contacts/add', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ mobile, name })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Failed to add contact');
+            }
+            
+            const result = await response.json();
+            return result.success;
+        } catch (err) {
+            console.error('Error adding contact:', err);
+            return false;
+        }
+    }
+
+    async function addAllLeadsToContacts() {
+        const leadsToAdd = leadsFilteredData.filter(lead => !contactsCache.get(lead.mobile));
+        
+        if (leadsToAdd.length === 0) {
+            showLeadsStatus('All leads are already in contacts!', 'success');
+            return;
+        }
+
+        showLeadsStatus(`Adding ${leadsToAdd.length} leads to contacts...`, 'info');
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const lead of leadsToAdd) {
+            try {
+                const success = await addContact(lead.mobile, lead.name);
+                if (success) {
+                    contactsCache.set(lead.mobile, true);
+                    successCount++;
+                } else {
+                    failCount++;
+                }
+                
+                // Small delay to avoid overwhelming the server
+                await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (err) {
+                console.error(`Failed to add contact for ${lead.mobile}:`, err);
+                failCount++;
+            }
+        }
+        
+        if (successCount > 0) {
+            showLeadsStatus(`Successfully added ${successCount} contacts${failCount > 0 ? `, ${failCount} failed` : ''}`, 'success');
+        } else {
+            showLeadsStatus(`Failed to add any contacts. ${failCount} errors.`, 'error');
+        }
+        
+        // Refresh the list to update contact status icons
+        renderLeadsList();
+    }
+
+    // Toggle contact status (add if not in contacts)
+    window.toggleContactStatus = async function(mobile, name) {
+        const isInContacts = contactsCache.get(mobile);
+        
+        if (isInContacts) {
+            showLeadsStatus('Contact already exists in WhatsApp', 'info');
+            return;
+        }
+        
+        try {
+            const success = await addContact(mobile, name);
+            if (success) {
+                contactsCache.set(mobile, true);
+                showLeadsStatus('Contact added successfully!', 'success');
+                
+                // Update the icon color
+                const btn = document.querySelector(`[data-mobile="${mobile}"]`);
+                if (btn) {
+                    const icon = btn.querySelector('.contact-status-icon');
+                    if (icon) {
+                        icon.classList.remove('text-red-600');
+                        icon.classList.add('text-green-600');
+                    }
+                }
+            } else {
+                showLeadsStatus('Failed to add contact', 'error');
+            }
+        } catch (err) {
+            console.error('Error adding contact:', err);
+            showLeadsStatus('Error adding contact', 'error');
+        }
+    }
+
+    // Check contact status for all leads
+    async function checkAllContactStatuses() {
+        const promises = leadsFilteredData.map(async (lead) => {
+            const exists = await checkContactStatus(lead.mobile);
+            contactsCache.set(lead.mobile, exists);
+            return { mobile: lead.mobile, exists };
+        });
+        
+        await Promise.all(promises);
+        
+        // Update the contact status icons
+        updateContactStatusIcons();
+    }
+
+    // Update contact status icons based on cache
+    function updateContactStatusIcons() {
+        const contactButtons = document.querySelectorAll('.contact-status-btn');
+        contactButtons.forEach(btn => {
+            const mobile = btn.getAttribute('data-mobile');
+            const icon = btn.querySelector('.contact-status-icon');
+            const isInContacts = contactsCache.get(mobile);
+            
+            if (icon) {
+                if (isInContacts) {
+                    icon.classList.remove('text-red-600');
+                    icon.classList.add('text-green-600');
+                } else {
+                    icon.classList.remove('text-green-600');
+                    icon.classList.add('text-red-600');
+                }
+            }
+        });
     }
 
     // Initialize when DOM is loaded
