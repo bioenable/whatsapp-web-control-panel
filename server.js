@@ -2451,9 +2451,13 @@ app.post('/api/contacts/check', async (req, res) => {
             return res.status(400).json({ error: 'Mobile number is required' });
         }
 
+        console.log('Checking contact status for:', mobile);
+
         // Normalize mobile number
         const normalizedNumber = mobile.replace(/[^0-9]/g, '');
         const chatId = normalizedNumber + '@c.us';
+        
+        console.log('Normalized chat ID:', chatId);
         
         // Try to get the chat
         const chat = await client.getChatById(chatId);
@@ -2461,8 +2465,10 @@ app.post('/api/contacts/check', async (req, res) => {
         // If we can get the chat, the contact exists
         const exists = chat && chat.id;
         
+        console.log('Contact exists:', exists);
         res.json({ exists: !!exists });
     } catch (err) {
+        console.log('Contact not found (expected for new contacts):', err.message);
         // If chat doesn't exist, it will throw an error
         res.json({ exists: false });
     }
@@ -2478,26 +2484,33 @@ app.post('/api/contacts/add', async (req, res) => {
             return res.status(400).json({ error: 'Mobile number is required' });
         }
 
+        console.log('Adding contact:', { mobile, name });
+
         // Normalize mobile number
         const normalizedNumber = mobile.replace(/[^0-9]/g, '');
         const chatId = normalizedNumber + '@c.us';
+        
+        console.log('Normalized chat ID:', chatId);
         
         // Check if contact already exists
         try {
             const existingChat = await client.getChatById(chatId);
             if (existingChat) {
+                console.log('Contact already exists');
                 return res.json({ success: true, message: 'Contact already exists' });
             }
         } catch (err) {
+            console.log('Contact does not exist, will add new contact');
             // Contact doesn't exist, continue to add
         }
         
         // Add contact to WhatsApp
-        await client.addContact({
+        const contact = await client.addContact({
             id: chatId,
             name: name || `Contact ${normalizedNumber}`
         });
         
+        console.log('Contact added successfully:', contact.id);
         res.json({ success: true, message: 'Contact added successfully' });
     } catch (err) {
         console.error('Error adding contact:', err);

@@ -65,6 +65,15 @@
         // Auto chat toggle
         if (leadsAutoChatToggle) {
             leadsAutoChatToggle.addEventListener('change', toggleAutoChat);
+            
+            // Add visual toggle functionality
+            const toggleLabel = leadsAutoChatToggle.nextElementSibling;
+            if (toggleLabel) {
+                toggleLabel.addEventListener('click', () => {
+                    leadsAutoChatToggle.checked = !leadsAutoChatToggle.checked;
+                    toggleAutoChat();
+                });
+            }
         }
 
         // Auto chat configuration
@@ -810,21 +819,59 @@
     };
 
     // Enhanced Auto chat functionality
-    function toggleAutoChat() {
-        autoChatConfig.enabled = leadsAutoChatToggle.checked;
-        saveAutoChatConfig();
+    async function toggleAutoChat() {
+        const isEnabled = leadsAutoChatToggle.checked;
         
-        if (autoChatConfig.enabled) {
-            console.log('Auto chat with new leads enabled');
-        } else {
-            console.log('Auto chat with new leads disabled');
+        try {
+            // Load current configuration
+            const configResponse = await fetch('/api/leads-config');
+            const config = await configResponse.json();
+            
+            // Update enabled state
+            config.enabled = isEnabled;
+            
+            // Save updated configuration
+            const saveResponse = await fetch('/api/leads-config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(config)
+            });
+            
+            if (!saveResponse.ok) {
+                throw new Error('Failed to save configuration');
+            }
+            
+            // Update local config
+            autoChatConfig.enabled = isEnabled;
+            
+            if (isEnabled) {
+                showLeadsStatus('Auto chat enabled', 'success');
+                startAutoFetch();
+            } else {
+                showLeadsStatus('Auto chat disabled', 'info');
+                stopAutoFetch();
+            }
+            
+        } catch (err) {
+            console.error('Error toggling auto chat:', err);
+            showLeadsStatus('Error updating auto chat setting', 'error');
+            // Revert the toggle if save failed
+            leadsAutoChatToggle.checked = !isEnabled;
         }
     }
 
+    // Open auto chat configuration modal
     async function openAutoChatConfig() {
         if (leadsAutoChatModal) {
             leadsAutoChatModal.classList.remove('hidden');
+            
+            // Populate forms with current configuration
             await populateAutoChatForm();
+            
+            // Populate test record select
+            populateTestRecordSelect();
         }
     }
 
@@ -837,8 +884,13 @@
     // Populate auto chat form with current configuration
     async function populateAutoChatForm() {
         try {
+            console.log('Loading configuration...');
             const configResponse = await fetch('/api/leads-config');
+            if (!configResponse.ok) {
+                throw new Error(`Failed to load config: ${configResponse.status}`);
+            }
             const config = await configResponse.json();
+            console.log('Loaded config:', config);
             
             // Populate auto chat form
             if (leadsAutoChatForm) {
@@ -847,10 +899,23 @@
                 const autoReplyField = leadsAutoChatForm.querySelector('[name="autoReply"]');
                 const autoReplyPromptField = leadsAutoChatForm.querySelector('[name="autoReplyPrompt"]');
                 
-                if (systemPromptField) systemPromptField.value = config.systemPrompt || '';
-                if (includeJsonContextField) includeJsonContextField.checked = config.includeJsonContext || false;
-                if (autoReplyField) autoReplyField.checked = config.autoReply || false;
-                if (autoReplyPromptField) autoReplyPromptField.value = config.autoReplyPrompt || '';
+                console.log('Populating auto chat form fields...');
+                if (systemPromptField) {
+                    systemPromptField.value = config.systemPrompt || '';
+                    console.log('System prompt set:', config.systemPrompt ? 'yes' : 'no');
+                }
+                if (includeJsonContextField) {
+                    includeJsonContextField.checked = config.includeJsonContext || false;
+                    console.log('Include JSON context set:', config.includeJsonContext);
+                }
+                if (autoReplyField) {
+                    autoReplyField.checked = config.autoReply || false;
+                    console.log('Auto reply set:', config.autoReply);
+                }
+                if (autoReplyPromptField) {
+                    autoReplyPromptField.value = config.autoReplyPrompt || '';
+                    console.log('Auto reply prompt set:', config.autoReplyPrompt ? 'yes' : 'no');
+                }
                 
                 // Show/hide auto reply section
                 const autoReplySection = document.getElementById('autoReplySection');
@@ -864,9 +929,14 @@
             }
             
             // Populate data configuration form
+            const leadsDataConfigForm = document.getElementById('leads-data-config-form');
             if (leadsDataConfigForm) {
                 const apiConfig = config.apiConfig || {};
                 const fieldMapping = apiConfig.fieldMapping || {};
+                
+                console.log('Populating data config form...');
+                console.log('API config:', apiConfig);
+                console.log('Field mapping:', fieldMapping);
                 
                 const apiUrlField = leadsDataConfigForm.querySelector('[name="apiUrl"]');
                 const apiMethodField = leadsDataConfigForm.querySelector('[name="apiMethod"]');
@@ -874,11 +944,26 @@
                 const apiHeadersField = leadsDataConfigForm.querySelector('[name="apiHeaders"]');
                 const apiBodyField = leadsDataConfigForm.querySelector('[name="apiBody"]');
                 
-                if (apiUrlField) apiUrlField.value = apiConfig.url || '';
-                if (apiMethodField) apiMethodField.value = apiConfig.method || 'POST';
-                if (refreshFrequencyField) refreshFrequencyField.value = Math.floor((apiConfig.refreshFrequency || 300000) / 1000);
-                if (apiHeadersField) apiHeadersField.value = JSON.stringify(apiConfig.headers || {}, null, 2);
-                if (apiBodyField) apiBodyField.value = JSON.stringify(apiConfig.body || {}, null, 2);
+                if (apiUrlField) {
+                    apiUrlField.value = apiConfig.url || '';
+                    console.log('API URL set:', apiConfig.url);
+                }
+                if (apiMethodField) {
+                    apiMethodField.value = apiConfig.method || 'POST';
+                    console.log('API method set:', apiConfig.method);
+                }
+                if (refreshFrequencyField) {
+                    refreshFrequencyField.value = Math.floor((apiConfig.refreshFrequency || 300000) / 1000);
+                    console.log('Refresh frequency set:', Math.floor((apiConfig.refreshFrequency || 300000) / 1000));
+                }
+                if (apiHeadersField) {
+                    apiHeadersField.value = JSON.stringify(apiConfig.headers || {}, null, 2);
+                    console.log('API headers set');
+                }
+                if (apiBodyField) {
+                    apiBodyField.value = JSON.stringify(apiConfig.body || {}, null, 2);
+                    console.log('API body set');
+                }
                 
                 // Populate field mapping
                 const fieldNameField = leadsDataConfigForm.querySelector('[name="fieldName"]');
@@ -898,10 +983,15 @@
                 if (fieldCreatedOnField) fieldCreatedOnField.value = fieldMapping.created_on || 'created_on';
                 if (fieldTypeField) fieldTypeField.value = fieldMapping.Type || 'Type';
                 if (fieldAdditionalDetailsField) fieldAdditionalDetailsField.value = fieldMapping.additional_details || 'additional_details';
+                
+                console.log('Field mapping populated');
             }
+            
+            console.log('Configuration forms populated successfully');
             
         } catch (err) {
             console.error('Error populating configuration forms:', err);
+            showLeadsStatus('Error loading configuration: ' + err.message, 'error');
         }
     }
 
@@ -1021,35 +1111,43 @@
         }
     }
 
+    // Load auto chat configuration
     async function loadAutoChatConfig() {
         try {
-            // Try to load from server first
-            const response = await fetch('/api/leads/config');
-            if (response.ok) {
-                const serverConfig = await response.json();
-                autoChatConfig = { ...autoChatConfig, ...serverConfig };
-                console.log('Auto chat config loaded from server:', autoChatConfig);
-            } else {
-                throw new Error('Failed to load config from server');
-            }
-        } catch (err) {
-            console.error('Error loading auto chat config from server, trying localStorage:', err);
+            const configResponse = await fetch('/api/leads-config');
+            const config = await configResponse.json();
             
-            // Fallback to localStorage
-            try {
-                const saved = localStorage.getItem('leadsAutoChatConfig');
-                if (saved) {
-                    autoChatConfig = { ...autoChatConfig, ...JSON.parse(saved) };
-                    console.log('Auto chat config loaded from localStorage:', autoChatConfig);
-                }
-            } catch (localErr) {
-                console.error('Error loading auto chat config from localStorage:', localErr);
+            // Update local config
+            autoChatConfig = {
+                enabled: config.enabled || false,
+                systemPrompt: config.systemPrompt || '',
+                includeJsonContext: config.includeJsonContext || true,
+                autoReply: config.autoReply || false,
+                autoReplyPrompt: config.autoReplyPrompt || ''
+            };
+            
+            // Update toggle state
+            if (leadsAutoChatToggle) {
+                leadsAutoChatToggle.checked = autoChatConfig.enabled;
             }
-        }
-        
-        // Update toggle state
-        if (leadsAutoChatToggle) {
-            leadsAutoChatToggle.checked = autoChatConfig.enabled;
+            
+            console.log('Auto chat config loaded:', autoChatConfig);
+            
+            // Start auto fetch if enabled
+            if (autoChatConfig.enabled) {
+                startAutoFetch();
+            }
+            
+        } catch (err) {
+            console.error('Error loading auto chat config:', err);
+            // Use default config if loading fails
+            autoChatConfig = {
+                enabled: false,
+                systemPrompt: '',
+                includeJsonContext: true,
+                autoReply: false,
+                autoReplyPrompt: ''
+            };
         }
     }
 
@@ -1440,42 +1538,15 @@
         }
     }
 
-    // Toggle contact status (add if not in contacts)
-    window.toggleContactStatus = async function(mobile, name) {
-        const isInContacts = contactsCache.get(mobile);
-        
-        if (isInContacts) {
-            showLeadsStatus('Contact already exists in WhatsApp', 'info');
-            return;
-        }
-        
-        try {
-            const success = await addContact(mobile, name);
-            if (success) {
-                contactsCache.set(mobile, true);
-                showLeadsStatus('Contact added successfully!', 'success');
-                
-                // Update the icon color
-                const btn = document.querySelector(`[data-mobile="${mobile}"]`);
-                if (btn) {
-                    const icon = btn.querySelector('.contact-status-icon');
-                    if (icon) {
-                        icon.classList.remove('text-red-600');
-                        icon.classList.add('text-green-600');
-                    }
-                }
-            } else {
-                showLeadsStatus('Failed to add contact', 'error');
-            }
-        } catch (err) {
-            console.error('Error adding contact:', err);
-            showLeadsStatus('Error adding contact', 'error');
-        }
-    }
-
     // Make addAllLeadsToContacts globally accessible
     window.addAllLeadsToContacts = async function() {
         console.log('addAllLeadsToContacts called');
+        
+        if (!leadsFilteredData || leadsFilteredData.length === 0) {
+            showLeadsStatus('No leads available to add to contacts', 'warning');
+            return;
+        }
+        
         const leadsToAdd = leadsFilteredData.filter(lead => !contactsCache.get(lead.mobile));
         
         console.log('Leads to add:', leadsToAdd.length);
@@ -1521,6 +1592,44 @@
         
         // Refresh the list to update contact status icons
         renderLeadsList();
+    }
+
+    // Toggle contact status (add if not in contacts)
+    window.toggleContactStatus = async function(mobile, name) {
+        console.log('toggleContactStatus called for:', mobile, name);
+        
+        const isInContacts = contactsCache.get(mobile);
+        console.log('Contact in cache:', isInContacts);
+        
+        if (isInContacts) {
+            showLeadsStatus('Contact already exists in WhatsApp', 'info');
+            return;
+        }
+        
+        try {
+            showLeadsStatus('Adding contact to WhatsApp...', 'info');
+            const success = await addContact(mobile, name);
+            if (success) {
+                contactsCache.set(mobile, true);
+                showLeadsStatus('Contact added successfully!', 'success');
+                
+                // Update the icon color
+                const btn = document.querySelector(`[data-mobile="${mobile}"]`);
+                if (btn) {
+                    const icon = btn.querySelector('.contact-status-icon');
+                    if (icon) {
+                        icon.classList.remove('text-red-600');
+                        icon.classList.add('text-green-600');
+                        console.log('Updated icon color for', mobile);
+                    }
+                }
+            } else {
+                showLeadsStatus('Failed to add contact', 'error');
+            }
+        } catch (err) {
+            console.error('Error adding contact:', err);
+            showLeadsStatus('Error adding contact: ' + err.message, 'error');
+        }
     }
 
     // Check contact status for all leads
