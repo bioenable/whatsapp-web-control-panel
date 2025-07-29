@@ -39,6 +39,7 @@ const GOOGLE_MODEL = process.env.GOOGLE_MODEL || 'gemini-2.0-flash';
 const AUTOMATIONS_FILE = path.join(__dirname, 'automations.json');
 const cron = require('node-cron');
 const { GoogleGenAI } = require('@google/genai');
+const mime = require('mime-types');
 
 // Initialize required JSON files with proper structure
 function initializeJsonFiles() {
@@ -271,24 +272,20 @@ function cleanupTempFiles() {
 }
 
 // Configure multer for different upload types
-const upload = multer({ 
+const upload = multer({
     storage: multer.diskStorage({
-        destination: (req, file, cb) => {
-            // Create temp directory if it doesn't exist
-            const tempDir = path.join(__dirname, 'temp');
-            if (!fs.existsSync(tempDir)) {
-                fs.mkdirSync(tempDir, { recursive: true });
-            }
-            cb(null, tempDir);
+        destination: function (req, file, cb) {
+            cb(null, TEMPLATE_MEDIA_DIR);
         },
-        filename: (req, file, cb) => {
-            const timestamp = Date.now();
-            const originalName = file.originalname;
-            const extension = originalName.split('.').pop();
-            cb(null, `temp-${timestamp}.${extension}`);
+        filename: function (req, file, cb) {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
         }
-    }), 
-    limits: { fileSize: 100 * 1024 * 1024 } // 100MB max
+    }),
+    limits: {
+        fileSize: 50 * 1024 * 1024, // 50MB limit
+        fieldSize: 50 * 1024 * 1024 // 50MB limit for fields
+    }
 });
 
 // Configure multer for template uploads (uses memory storage for buffer access)
@@ -315,10 +312,10 @@ const PORT = 5014;
 
 // Middleware
 app.use(cors());
-// Place all routes that use multer (file uploads) above this line
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+app.use(express.static('public'));
 app.use('/message-templates', express.static(TEMPLATE_MEDIA_DIR));
-app.use(bodyParser.json());
 
 // Initialize WhatsApp client
 const client = new Client({
@@ -2012,28 +2009,113 @@ app.post('/api/bulk-retry/:filename', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
     
     try {
-        const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(BULK_FILE);
-        let retryCount = 0;
+        const { filename } = req.params;
+        const bulkMessagesPath = path.join(__dirname, 'bulk_messages.json');
         
-        for (let i = 0; i < records.length; i++) {
-            if (records[i].import_filename === filename && records[i].status === 'failed') {
-                records[i].status = 'pending';
-                records[i].send_datetime = new Date().toISOString();
-                delete records[i].error; // Clear previous error
-                retryCount++;
+        if (!fs.existsSync(bulkMessagesPath)) {
+            return res.status(404).json({ error: 'Bulk messages file not found' });
+        }
+        
+        const bulkMessages = JSON.parse(fs.readFileSync(bulkMessagesPath, 'utf8'));
+        const importData = bulkMessages[filename];
+        
+        if (!importData) {
+            return res.status(404).json({ error: 'Import not found' });
+        }
+        
+        const failedMessages = importData.messages.filter(msg => msg.status === 'failed');
+        
+        if (failedMessages.length === 0) {
+            return res.json({ message: 'No failed messages to retry' });
+        }
+        
+        console.log(`Retrying ${failedMessages.length} failed messages for import: ${filename}`);
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const message of failedMessages) {
+            try {
+                const chatId = message.to + '@c.us';
+                let media = null;
+                
+                if (message.media) {
+                    try {
+                        let mediaPath = message.media;
+                        if (mediaPath.startsWith('/message-templates/') || mediaPath.startsWith('/')) {
+                            mediaPath = path.join(__dirname, 'public', mediaPath);
+                        } else {
+                            mediaPath = path.join(__dirname, mediaPath);
+                        }
+                        
+                        if (fs.existsSync(mediaPath)) {
+                            const mimeType = mime.lookup(mediaPath) || 'application/octet-stream';
+                            const mediaBuffer = fs.readFileSync(mediaPath);
+                            media = new MessageMedia(mimeType, mediaBuffer.toString('base64'));
+                        } else {
+                            console.error(`Media file not found: ${mediaPath}`);
+                            message.status = 'failed';
+                            message.error = 'Media file not found';
+                            failCount++;
+                            continue;
+                        }
+                    } catch (mediaErr) {
+                        console.error('Error processing media:', mediaErr);
+                        message.status = 'failed';
+                        message.error = 'Media processing error: ' + mediaErr.message;
+                        failCount++;
+                        continue;
+                    }
+                }
+                
+                const result = await retryOperation(async () => {
+                    if (media) {
+                        return await client.sendMessage(chatId, media, { caption: message.text });
+                    } else {
+                        return await client.sendMessage(chatId, message.text);
+                    }
+                }, 3, 2000);
+                
+                if (result.success) {
+                    message.status = 'sent';
+                    message.sentAt = new Date().toISOString();
+                    delete message.error;
+                    successCount++;
+                    console.log(`Retry successful for ${message.to}`);
+                } else {
+                    message.status = 'failed';
+                    message.error = result.error || 'Unknown error';
+                    failCount++;
+                    console.error(`Retry failed for ${message.to}:`, result.error);
+                }
+                
+                // Small delay between messages
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+            } catch (err) {
+                console.error(`Error retrying message to ${message.to}:`, err);
+                message.status = 'failed';
+                message.error = err.message;
+                failCount++;
             }
         }
         
-        writeJson(BULK_FILE, records);
+        // Save updated status
+        fs.writeFileSync(bulkMessagesPath, JSON.stringify(bulkMessages, null, 2));
         
-        res.json({ 
-            success: true, 
-            retried: retryCount 
+        res.json({
+            success: true,
+            message: `Retry completed: ${successCount} successful, ${failCount} failed`,
+            successCount,
+            failCount
         });
+        
     } catch (err) {
-        console.error('Bulk retry error:', err);
-        res.status(500).json({ error: err.message });
+        console.error('Error in bulk retry:', err);
+        res.status(500).json({ 
+            error: 'Failed to retry bulk messages', 
+            details: err.message 
+        });
     }
 });
 
@@ -2619,5 +2701,90 @@ app.post('/api/leads-config', (req, res) => {
         console.error('Error saving leads config:', err);
         res.status(500).json({ error: 'Failed to save leads configuration' });
     }
+});
+
+// Upload media for message templates
+app.post('/api/upload-media', upload.single('media'), (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: 'No file uploaded' });
+        }
+
+        const filePath = req.file.path;
+        const fileName = req.file.filename;
+        const fileUrl = `/message-templates/${fileName}`;
+
+        console.log('Media uploaded:', { fileName, filePath, fileUrl });
+
+        res.json({
+            success: true,
+            fileName: fileName,
+            filePath: filePath,
+            fileUrl: fileUrl
+        });
+    } catch (error) {
+        console.error('Error uploading media:', error);
+        res.status(500).json({ error: 'Failed to upload media', details: error.message });
+    }
+});
+
+// Error handling middleware for multer errors
+app.use((error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        console.error('Multer error:', error);
+        if (error.code === 'LIMIT_FILE_SIZE') {
+            return res.status(413).json({ 
+                error: 'File too large', 
+                details: 'File size exceeds the 50MB limit' 
+            });
+        }
+        if (error.code === 'LIMIT_FIELD_SIZE') {
+            return res.status(413).json({ 
+                error: 'Field too large', 
+                details: 'Field size exceeds the 50MB limit' 
+            });
+        }
+        return res.status(400).json({ 
+            error: 'File upload error', 
+            details: error.message 
+        });
+    }
+    
+    if (error.name === 'PayloadTooLargeError') {
+        console.error('Payload too large error:', error);
+        return res.status(413).json({ 
+            error: 'Request too large', 
+            details: 'Request payload exceeds the 50MB limit' 
+        });
+    }
+    
+    next(error);
+});
+
+// General error handling middleware (should be last)
+app.use((error, req, res, next) => {
+    console.error('Unhandled error:', error);
+    
+    // Don't leak error details in production
+    const errorMessage = process.env.NODE_ENV === 'production' 
+        ? 'Internal server error' 
+        : error.message;
+    
+    res.status(500).json({
+        error: 'Internal server error',
+        message: errorMessage,
+        ...(process.env.NODE_ENV !== 'production' && { stack: error.stack })
+    });
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    process.exit(1);
 });
 
