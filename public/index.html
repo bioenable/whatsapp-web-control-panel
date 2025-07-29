@@ -684,13 +684,12 @@
                             </div>
                             <div class="flex items-center space-x-3">
                                 <div class="flex items-center space-x-2">
-                                    <label class="flex items-center">
-                                        <input type="checkbox" id="leads-auto-chat-toggle" class="sr-only">
-                                        <div class="relative w-16 h-8 bg-gray-200 rounded-full transition-colors duration-200 ease-in-out border-2 border-gray-300 hover:border-gray-400">
-                                            <div class="absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform duration-200 ease-in-out transform"></div>
-                                        </div>
-                                        <span class="ml-3 text-sm font-medium text-gray-700">Auto chat with New Lead</span>
-                                    </label>
+                                    <div id="auto-chat-container" class="border-2 border-gray-300 rounded-lg p-3 transition-colors duration-200 cursor-pointer hover:border-gray-400">
+                                        <label class="flex items-center space-x-3 cursor-pointer">
+                                            <input type="checkbox" id="leads-auto-chat-toggle" class="w-4 h-4 text-red-600 bg-gray-100 border-gray-300 rounded focus:ring-red-500 focus:ring-2">
+                                            <span class="text-sm font-medium text-gray-700">Auto chat with New Lead</span>
+                                        </label>
+                                    </div>
                                 </div>
                                 <button id="leads-auto-chat-config-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm flex items-center space-x-2">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

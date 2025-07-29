@@ -831,74 +831,93 @@
     };
 
     // Enhanced Auto chat functionality
-    async function toggleAutoChat() {
-        const isEnabled = leadsAutoChatToggle.checked;
-        console.log('Toggle auto chat:', isEnabled);
+    function toggleAutoChat() {
+        const toggle = document.getElementById('leads-auto-chat-toggle');
+        if (!toggle) return;
         
-        try {
-            // Load current configuration
-            const configResponse = await fetch('/api/leads-config');
-            if (!configResponse.ok) {
-                throw new Error('Failed to load configuration');
-            }
-            const config = await configResponse.json();
-            
-            // Update enabled state
-            config.enabled = isEnabled;
-            
-            // Save updated configuration
-            const saveResponse = await fetch('/api/leads-config', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(config)
+        const enabled = toggle.checked;
+        
+        // Fetch current config
+        fetch('/api/leads-config')
+            .then(response => response.json())
+            .then(config => {
+                // Update only the enabled state
+                config.enabled = enabled;
+                
+                // Save updated config
+                return fetch('/api/leads-config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(config)
+                });
+            })
+            .then(response => {
+                if (response.ok) {
+                    console.log('Auto chat config saved:', enabled);
+                    showLeadsStatus(`Auto chat ${enabled ? 'enabled' : 'disabled'}`, 'success');
+                    
+                    // Start or stop auto fetch based on state
+                    if (enabled) {
+                        startAutoFetch();
+                    } else {
+                        stopAutoFetch();
+                    }
+                } else {
+                    throw new Error('Failed to save config');
+                }
+            })
+            .catch(error => {
+                console.error('Error saving auto chat config:', error);
+                // Revert the toggle if save failed
+                toggle.checked = !enabled;
+                showLeadsStatus('Failed to save auto chat config', 'error');
             });
-            
-            if (!saveResponse.ok) {
-                throw new Error('Failed to save configuration');
-            }
-            
-            // Update local config
-            autoChatConfig.enabled = isEnabled;
-            
-            if (isEnabled) {
-                showLeadsStatus('Auto chat enabled - will start chatting with new leads', 'success');
-                startAutoFetch();
-            } else {
-                showLeadsStatus('Auto chat disabled', 'info');
-                stopAutoFetch();
-            }
-            
-        } catch (err) {
-            console.error('Error toggling auto chat:', err);
-            showLeadsStatus('Error updating auto chat setting: ' + err.message, 'error');
-            // Revert the toggle if save failed
-            leadsAutoChatToggle.checked = !isEnabled;
-        }
     }
 
     // Initialize auto chat toggle
     function initAutoChatToggle() {
-        if (leadsAutoChatToggle) {
-            // Set initial state
-            leadsAutoChatToggle.checked = autoChatConfig.enabled;
-            
-            // Add change event listener
-            leadsAutoChatToggle.addEventListener('change', toggleAutoChat);
-            
-            // Add click handler for the toggle label
-            const toggleLabel = leadsAutoChatToggle.nextElementSibling;
-            if (toggleLabel) {
-                toggleLabel.addEventListener('click', (e) => {
-                    e.preventDefault();
-                    leadsAutoChatToggle.checked = !leadsAutoChatToggle.checked;
-                    toggleAutoChat();
-                });
-            }
-            
-            console.log('Auto chat toggle initialized with state:', autoChatConfig.enabled);
+        const toggle = document.getElementById('leads-auto-chat-toggle');
+        const container = document.getElementById('auto-chat-container');
+        
+        if (!toggle || !container) {
+            console.error('Auto chat toggle elements not found');
+            return;
         }
+        
+        // Load initial state
+        loadAutoChatConfig();
+        
+        // Add change listener
+        toggle.addEventListener('change', function() {
+            toggleAutoChat();
+        });
+        
+        // Add click handler for the container to toggle the checkbox
+        container.addEventListener('click', function(e) {
+            // Prevent double-toggling if clicking directly on checkbox
+            if (e.target.type === 'checkbox') return;
+            toggle.checked = !toggle.checked;
+            toggleAutoChat();
+        });
+        
+        // Update background color based on checkbox state
+        function updateBackgroundColor() {
+            if (toggle.checked) {
+                container.classList.remove('bg-gray-50', 'border-gray-300');
+                container.classList.add('bg-red-100', 'border-red-300');
+            } else {
+                container.classList.remove('bg-red-100', 'border-red-300');
+                container.classList.add('bg-gray-50', 'border-gray-300');
+            }
+        }
+        
+        // Initial color update
+        updateBackgroundColor();
+        
+        // Update color when checkbox changes
+        toggle.addEventListener('change', updateBackgroundColor);
     }
 
     // Open auto chat configuration modal
@@ -1151,43 +1170,22 @@
     }
 
     // Load auto chat configuration
-    async function loadAutoChatConfig() {
-        try {
-            const configResponse = await fetch('/api/leads-config');
-            const config = await configResponse.json();
-            
-            // Update local config
-            autoChatConfig = {
-                enabled: config.enabled || false,
-                systemPrompt: config.systemPrompt || '',
-                includeJsonContext: config.includeJsonContext || true,
-                autoReply: config.autoReply || false,
-                autoReplyPrompt: config.autoReplyPrompt || ''
-            };
-            
-            // Update toggle state
-            if (leadsAutoChatToggle) {
-                leadsAutoChatToggle.checked = autoChatConfig.enabled;
-            }
-            
-            console.log('Auto chat config loaded:', autoChatConfig);
-            
-            // Start auto fetch if enabled
-            if (autoChatConfig.enabled) {
-                startAutoFetch();
-            }
-            
-        } catch (err) {
-            console.error('Error loading auto chat config:', err);
-            // Use default config if loading fails
-            autoChatConfig = {
-                enabled: false,
-                systemPrompt: '',
-                includeJsonContext: true,
-                autoReply: false,
-                autoReplyPrompt: ''
-            };
-        }
+    function loadAutoChatConfig() {
+        fetch('/api/leads-config')
+            .then(response => response.json())
+            .then(config => {
+                console.log('Loaded auto chat config:', config);
+                const toggle = document.getElementById('leads-auto-chat-toggle');
+                if (toggle) {
+                    toggle.checked = config.enabled || false;
+                    // Trigger the background color update
+                    const event = new Event('change');
+                    toggle.dispatchEvent(event);
+                }
+            })
+            .catch(error => {
+                console.error('Error loading auto chat config:', error);
+            });
     }
 
     function testAutoChat() {
