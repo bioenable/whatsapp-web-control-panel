@@ -63,19 +63,8 @@
         }
 
         // Auto chat toggle
-        if (leadsAutoChatToggle) {
-            leadsAutoChatToggle.addEventListener('change', toggleAutoChat);
-            
-            // Add visual toggle functionality
-            const toggleLabel = leadsAutoChatToggle.nextElementSibling;
-            if (toggleLabel) {
-                toggleLabel.addEventListener('click', () => {
-                    leadsAutoChatToggle.checked = !leadsAutoChatToggle.checked;
-                    toggleAutoChat();
-                });
-            }
-        }
-
+        initAutoChatToggle();
+        
         // Auto chat configuration
         if (leadsAutoChatConfigBtn) {
             leadsAutoChatConfigBtn.addEventListener('click', openAutoChatConfig);
@@ -821,10 +810,14 @@
     // Enhanced Auto chat functionality
     async function toggleAutoChat() {
         const isEnabled = leadsAutoChatToggle.checked;
+        console.log('Toggle auto chat:', isEnabled);
         
         try {
             // Load current configuration
             const configResponse = await fetch('/api/leads-config');
+            if (!configResponse.ok) {
+                throw new Error('Failed to load configuration');
+            }
             const config = await configResponse.json();
             
             // Update enabled state
@@ -847,7 +840,7 @@
             autoChatConfig.enabled = isEnabled;
             
             if (isEnabled) {
-                showLeadsStatus('Auto chat enabled', 'success');
+                showLeadsStatus('Auto chat enabled - will start chatting with new leads', 'success');
                 startAutoFetch();
             } else {
                 showLeadsStatus('Auto chat disabled', 'info');
@@ -856,9 +849,32 @@
             
         } catch (err) {
             console.error('Error toggling auto chat:', err);
-            showLeadsStatus('Error updating auto chat setting', 'error');
+            showLeadsStatus('Error updating auto chat setting: ' + err.message, 'error');
             // Revert the toggle if save failed
             leadsAutoChatToggle.checked = !isEnabled;
+        }
+    }
+
+    // Initialize auto chat toggle
+    function initAutoChatToggle() {
+        if (leadsAutoChatToggle) {
+            // Set initial state
+            leadsAutoChatToggle.checked = autoChatConfig.enabled;
+            
+            // Add change event listener
+            leadsAutoChatToggle.addEventListener('change', toggleAutoChat);
+            
+            // Add click handler for the toggle label
+            const toggleLabel = leadsAutoChatToggle.nextElementSibling;
+            if (toggleLabel) {
+                toggleLabel.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    leadsAutoChatToggle.checked = !leadsAutoChatToggle.checked;
+                    toggleAutoChat();
+                });
+            }
+            
+            console.log('Auto chat toggle initialized with state:', autoChatConfig.enabled);
         }
     }
 
@@ -1494,8 +1510,10 @@
     }
 
     // Contact Management Functions
+    // Check contact status for a specific mobile number
     async function checkContactStatus(mobile) {
         try {
+            console.log('Checking contact status for:', mobile);
             const response = await fetch('/api/contacts/check', {
                 method: 'POST',
                 headers: {
@@ -1505,13 +1523,15 @@
             });
             
             if (!response.ok) {
-                throw new Error('Failed to check contact status');
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
             
             const result = await response.json();
+            console.log('Contact check result for', mobile, ':', result);
+            
             return result.exists;
         } catch (err) {
-            console.error('Error checking contact status:', err);
+            console.error('Error checking contact status for', mobile, ':', err);
             return false;
         }
     }
@@ -1542,6 +1562,12 @@
     window.addAllLeadsToContacts = async function() {
         console.log('addAllLeadsToContacts called');
         
+        const addContactsBtn = document.getElementById('leads-add-contacts-btn');
+        if (!addContactsBtn) {
+            console.error('Add contacts button not found');
+            return;
+        }
+        
         if (!leadsFilteredData || leadsFilteredData.length === 0) {
             showLeadsStatus('No leads available to add to contacts', 'warning');
             return;
@@ -1558,40 +1584,86 @@
             return;
         }
 
+        // Start animation
+        addContactsBtn.disabled = true;
+        addContactsBtn.innerHTML = `
+            <svg class="animate-spin -ml-1 mr-3 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            Adding Contacts...
+        `;
+        
         showLeadsStatus(`Adding ${leadsToAdd.length} leads to contacts...`, 'info');
         
         let successCount = 0;
         let failCount = 0;
         
-        for (const lead of leadsToAdd) {
-            try {
-                console.log(`Adding contact for ${lead.mobile} (${lead.name})`);
-                const success = await addContact(lead.mobile, lead.name);
-                if (success) {
-                    contactsCache.set(lead.mobile, true);
-                    successCount++;
-                    console.log(`Successfully added ${lead.mobile}`);
-                } else {
+        // Set timeout for 15 seconds
+        const timeout = setTimeout(() => {
+            addContactsBtn.disabled = false;
+            addContactsBtn.innerHTML = `
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                </svg>
+                <span>Add All to Contacts</span>
+            `;
+            showLeadsStatus('Operation timed out after 15 seconds', 'error');
+        }, 15000);
+        
+        try {
+            for (const lead of leadsToAdd) {
+                try {
+                    console.log(`Adding contact for ${lead.mobile} (${lead.name})`);
+                    const success = await addContact(lead.mobile, lead.name);
+                    if (success) {
+                        contactsCache.set(lead.mobile, true);
+                        successCount++;
+                        console.log(`Successfully added ${lead.mobile}`);
+                    } else {
+                        failCount++;
+                        console.log(`Failed to add ${lead.mobile}`);
+                    }
+                    
+                    // Small delay to avoid overwhelming the server
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                } catch (err) {
+                    console.error(`Failed to add contact for ${lead.mobile}:`, err);
                     failCount++;
-                    console.log(`Failed to add ${lead.mobile}`);
                 }
-                
-                // Small delay to avoid overwhelming the server
-                await new Promise(resolve => setTimeout(resolve, 100));
-            } catch (err) {
-                console.error(`Failed to add contact for ${lead.mobile}:`, err);
-                failCount++;
             }
+            
+            clearTimeout(timeout);
+            
+            if (successCount > 0) {
+                showLeadsStatus(`Successfully added ${successCount} contacts${failCount > 0 ? `, ${failCount} failed` : ''}`, 'success');
+            } else {
+                showLeadsStatus(`Failed to add any contacts. ${failCount} errors.`, 'error');
+            }
+            
+            // Refresh the list to update contact status icons
+            renderLeadsList();
+            
+        } catch (err) {
+            clearTimeout(timeout);
+            console.error('Error in addAllLeadsToContacts:', err);
+            showLeadsStatus('Error adding contacts: ' + err.message, 'error');
+        } finally {
+            // Reset button
+            addContactsBtn.disabled = false;
+            addContactsBtn.innerHTML = `
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                </svg>
+                <span>Add All to Contacts</span>
+            `;
         }
-        
-        if (successCount > 0) {
-            showLeadsStatus(`Successfully added ${successCount} contacts${failCount > 0 ? `, ${failCount} failed` : ''}`, 'success');
-        } else {
-            showLeadsStatus(`Failed to add any contacts. ${failCount} errors.`, 'error');
-        }
-        
-        // Refresh the list to update contact status icons
-        renderLeadsList();
     }
 
     // Toggle contact status (add if not in contacts)
@@ -1634,15 +1706,31 @@
 
     // Check contact status for all leads
     async function checkAllContactStatuses() {
-        const promises = leadsFilteredData.map(async (lead) => {
-            const exists = await checkContactStatus(lead.mobile);
-            contactsCache.set(lead.mobile, exists);
-            return { mobile: lead.mobile, exists };
-        });
+        if (!leadsFilteredData || leadsFilteredData.length === 0) {
+            console.log('No leads data to check contacts for');
+            return;
+        }
         
-        await Promise.all(promises);
+        console.log('Checking contact statuses for', leadsFilteredData.length, 'leads');
         
-        // Update the contact status icons
+        // Clear the cache first
+        contactsCache.clear();
+        
+        for (const lead of leadsFilteredData) {
+            try {
+                const exists = await checkContactStatus(lead.mobile);
+                contactsCache.set(lead.mobile, exists);
+                console.log(`Contact ${lead.mobile}: ${exists ? 'EXISTS' : 'NOT FOUND'}`);
+                
+                // Small delay to avoid overwhelming the server
+                await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (err) {
+                console.error('Error checking contact for', lead.mobile, ':', err);
+                contactsCache.set(lead.mobile, false);
+            }
+        }
+        
+        console.log('Contact status check completed. Cache size:', contactsCache.size);
         updateContactStatusIcons();
     }
 
@@ -1668,87 +1756,238 @@
 
     // Test API configuration
     async function testApiConfiguration() {
-        const form = document.getElementById('leads-data-config-form');
-        const formData = new FormData(form);
+        const leadsDataConfigForm = document.getElementById('leads-data-config-form');
+        if (!leadsDataConfigForm) {
+            console.error('Data config form not found');
+            return;
+        }
         
-        const config = {
-            url: formData.get('apiUrl'),
-            method: formData.get('apiMethod'),
-            headers: JSON.parse(formData.get('apiHeaders') || '{}'),
-            body: JSON.parse(formData.get('apiBody') || '{}')
-        };
+        const formData = new FormData(leadsDataConfigForm);
+        const apiUrl = formData.get('apiUrl');
+        const apiMethod = formData.get('apiMethod');
+        const refreshFrequency = formData.get('refreshFrequency');
+        const apiHeaders = formData.get('apiHeaders');
+        const apiBody = formData.get('apiBody');
+        
+        if (!apiUrl) {
+            showLeadsStatus('Please enter API URL', 'error');
+            return;
+        }
         
         try {
             showLeadsStatus('Testing API configuration...', 'info');
             
+            const requestData = {
+                url: apiUrl,
+                method: apiMethod || 'POST',
+                headers: apiHeaders ? JSON.parse(apiHeaders) : {},
+                body: apiBody ? JSON.parse(apiBody) : {},
+                fieldMapping: null // We'll get the raw response
+            };
+            
+            // Show request details
+            const requestDetails = document.getElementById('request-details');
+            if (requestDetails) {
+                requestDetails.value = JSON.stringify(requestData, null, 2);
+            }
+            
             const response = await fetch('/api/test-leads-api', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(config)
+                body: JSON.stringify(requestData)
             });
             
             const result = await response.json();
             
-            if (result.success) {
-                showLeadsStatus('API test successful!', 'success');
-                apiTestResult.classList.remove('hidden');
-                apiTestResult.querySelector('pre').textContent = JSON.stringify(result.data, null, 2);
-            } else {
-                showLeadsStatus(`API test failed: ${result.error}`, 'error');
+            // Show response details
+            const responseDetails = document.getElementById('response-details');
+            if (responseDetails) {
+                responseDetails.value = JSON.stringify(result, null, 2);
             }
+            
+            // Show field detection if data is available
+            const fieldDetection = document.getElementById('field-detection');
+            const detectedFields = document.getElementById('detected-fields');
+            
+            if (result.success && result.data && Array.isArray(result.data) && result.data.length > 0) {
+                const sampleRecord = result.data[0];
+                const fields = Object.keys(sampleRecord);
+                
+                if (fieldDetection && detectedFields) {
+                    fieldDetection.classList.remove('hidden');
+                    detectedFields.innerHTML = `
+                        <div class="text-green-600 font-medium mb-2">✓ Fields detected in response:</div>
+                        <div class="grid grid-cols-2 gap-2">
+                            ${fields.map(field => `<div class="text-sm">• ${field}</div>`).join('')}
+                        </div>
+                        <div class="mt-2 text-xs text-gray-600">
+                            Sample record has ${fields.length} fields. Use these field names in the mapping section above.
+                        </div>
+                    `;
+                }
+                
+                showLeadsStatus(`API test successful! Found ${result.data.length} records with ${fields.length} fields each.`, 'success');
+            } else if (result.success) {
+                if (fieldDetection) fieldDetection.classList.add('hidden');
+                showLeadsStatus('API test successful but no data found or invalid response format.', 'warning');
+            } else {
+                if (fieldDetection) fieldDetection.classList.add('hidden');
+                showLeadsStatus('API test failed: ' + (result.error || 'Unknown error'), 'error');
+            }
+            
+            // Show the result area
+            const apiTestResult = document.getElementById('api-test-result');
+            if (apiTestResult) {
+                apiTestResult.classList.remove('hidden');
+            }
+            
         } catch (err) {
             console.error('API test error:', err);
-            showLeadsStatus('API test failed', 'error');
+            showLeadsStatus('API test failed: ' + err.message, 'error');
+            
+            // Show error in response details
+            const responseDetails = document.getElementById('response-details');
+            if (responseDetails) {
+                responseDetails.value = JSON.stringify({ error: err.message }, null, 2);
+            }
+            
+            // Hide field detection
+            const fieldDetection = document.getElementById('field-detection');
+            if (fieldDetection) {
+                fieldDetection.classList.add('hidden');
+            }
+            
+            // Show the result area
+            const apiTestResult = document.getElementById('api-test-result');
+            if (apiTestResult) {
+                apiTestResult.classList.remove('hidden');
+            }
         }
     }
 
-    // View sample data
+    // View sample data with field mapping
     async function viewSampleData() {
-        const form = document.getElementById('leads-data-config-form');
-        const formData = new FormData(form);
+        const leadsDataConfigForm = document.getElementById('leads-data-config-form');
+        if (!leadsDataConfigForm) {
+            console.error('Data config form not found');
+            return;
+        }
         
-        const config = {
-            url: formData.get('apiUrl'),
-            method: formData.get('apiMethod'),
-            headers: JSON.parse(formData.get('apiHeaders') || '{}'),
-            body: JSON.parse(formData.get('apiBody') || '{}'),
-            fieldMapping: {
-                name: formData.get('fieldName'),
-                email: formData.get('fieldEmail'),
-                mobile: formData.get('fieldMobile'),
-                inquiry: formData.get('fieldInquiry'),
-                source_url: formData.get('fieldSourceUrl'),
-                created_on: formData.get('fieldCreatedOn'),
-                Type: formData.get('fieldType'),
-                additional_details: formData.get('fieldAdditionalDetails')
-            }
+        const formData = new FormData(leadsDataConfigForm);
+        const apiUrl = formData.get('apiUrl');
+        const apiMethod = formData.get('apiMethod');
+        const apiHeaders = formData.get('apiHeaders');
+        const apiBody = formData.get('apiBody');
+        
+        // Get field mapping
+        const fieldMapping = {
+            name: formData.get('fieldName') || 'name',
+            email: formData.get('fieldEmail') || 'email',
+            mobile: formData.get('fieldMobile') || 'mobile',
+            inquiry: formData.get('fieldInquiry') || 'inquiry',
+            source_url: formData.get('fieldSourceUrl') || 'source_url',
+            created_on: formData.get('fieldCreatedOn') || 'created_on',
+            Type: formData.get('fieldType') || 'Type',
+            additional_details: formData.get('fieldAdditionalDetails') || 'additional_details'
         };
         
+        if (!apiUrl) {
+            showLeadsStatus('Please enter API URL', 'error');
+            return;
+        }
+        
         try {
-            showLeadsStatus('Fetching sample data...', 'info');
+            showLeadsStatus('Fetching sample data with field mapping...', 'info');
+            
+            const requestData = {
+                url: apiUrl,
+                method: apiMethod || 'POST',
+                headers: apiHeaders ? JSON.parse(apiHeaders) : {},
+                body: apiBody ? JSON.parse(apiBody) : {},
+                fieldMapping: fieldMapping
+            };
+            
+            // Show request details
+            const requestDetails = document.getElementById('request-details');
+            if (requestDetails) {
+                requestDetails.value = JSON.stringify(requestData, null, 2);
+            }
             
             const response = await fetch('/api/test-leads-api', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(config)
+                body: JSON.stringify(requestData)
             });
             
             const result = await response.json();
             
-            if (result.success) {
-                showLeadsStatus('Sample data fetched successfully!', 'success');
-                apiTestResult.classList.remove('hidden');
-                apiTestResult.querySelector('pre').textContent = JSON.stringify(result.processedData, null, 2);
-            } else {
-                showLeadsStatus(`Failed to fetch sample data: ${result.error}`, 'error');
+            // Show response details
+            const responseDetails = document.getElementById('response-details');
+            if (responseDetails) {
+                responseDetails.value = JSON.stringify(result, null, 2);
             }
+            
+            // Show field detection
+            const fieldDetection = document.getElementById('field-detection');
+            const detectedFields = document.getElementById('detected-fields');
+            
+            if (result.success && result.processedData && Array.isArray(result.processedData) && result.processedData.length > 0) {
+                const sampleRecord = result.processedData[0];
+                const fields = Object.keys(sampleRecord);
+                
+                if (fieldDetection && detectedFields) {
+                    fieldDetection.classList.remove('hidden');
+                    detectedFields.innerHTML = `
+                        <div class="text-green-600 font-medium mb-2">✓ Processed data with field mapping:</div>
+                        <div class="grid grid-cols-2 gap-2">
+                            ${fields.map(field => `<div class="text-sm">• ${field}: ${sampleRecord[field] || 'N/A'}</div>`).join('')}
+                        </div>
+                        <div class="mt-2 text-xs text-gray-600">
+                            Sample processed record with ${fields.length} mapped fields. This is how the data will appear in the leads list.
+                        </div>
+                    `;
+                }
+                
+                showLeadsStatus(`Sample data processed successfully! Found ${result.processedData.length} records with field mapping.`, 'success');
+            } else if (result.success) {
+                if (fieldDetection) fieldDetection.classList.add('hidden');
+                showLeadsStatus('Sample data fetch successful but no processed data found.', 'warning');
+            } else {
+                if (fieldDetection) fieldDetection.classList.add('hidden');
+                showLeadsStatus('Sample data fetch failed: ' + (result.error || 'Unknown error'), 'error');
+            }
+            
+            // Show the result area
+            const apiTestResult = document.getElementById('api-test-result');
+            if (apiTestResult) {
+                apiTestResult.classList.remove('hidden');
+            }
+            
         } catch (err) {
             console.error('Sample data error:', err);
-            showLeadsStatus('Failed to fetch sample data', 'error');
+            showLeadsStatus('Sample data fetch failed: ' + err.message, 'error');
+            
+            // Show error in response details
+            const responseDetails = document.getElementById('response-details');
+            if (responseDetails) {
+                responseDetails.value = JSON.stringify({ error: err.message }, null, 2);
+            }
+            
+            // Hide field detection
+            const fieldDetection = document.getElementById('field-detection');
+            if (fieldDetection) {
+                fieldDetection.classList.add('hidden');
+            }
+            
+            // Show the result area
+            const apiTestResult = document.getElementById('api-test-result');
+            if (apiTestResult) {
+                apiTestResult.classList.remove('hidden');
+            }
         }
     }
 

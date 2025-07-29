@@ -774,39 +774,33 @@
                             <div id="auto-chat-tab" class="tab-content">
                                 <form id="leads-auto-chat-form" class="space-y-4">
                                     <div>
-                                        <label class="block text-sm font-medium mb-1">System Prompt</label>
-                                        <textarea name="systemPrompt" class="w-full border rounded px-3 py-2" rows="4" 
-                                                  placeholder="e.g. You are a helpful sales assistant. Your goal is to engage with leads and convert them into customers..."></textarea>
-                                        <div class="text-xs text-gray-500 mt-1">This prompt will be used to generate initial messages for new leads.</div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">System Prompt</label>
+                                        <textarea name="systemPrompt" rows="6" class="w-full border rounded-md px-3 py-2 text-sm" 
+                                                  placeholder="Enter the system prompt for AI..."></textarea>
                                     </div>
                                     
-                                    <div class="flex items-center space-x-2">
-                                        <input type="checkbox" name="includeJsonContext" id="includeJsonContext" class="mr-2">
-                                        <label for="includeJsonContext" class="text-sm font-medium">Include JSON record as context</label>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" name="includeJsonContext" class="mr-2">
+                                        <label class="text-sm text-gray-700">Include JSON context in prompts</label>
                                     </div>
                                     
-                                    <div class="flex items-center space-x-2">
-                                        <input type="checkbox" name="autoReply" id="autoReply" class="mr-2">
-                                        <label for="autoReply" class="text-sm font-medium">Enable Auto Reply</label>
+                                    <div class="flex items-center">
+                                        <input type="checkbox" name="autoReply" class="mr-2">
+                                        <label class="text-sm text-gray-700">Enable auto-reply to customer messages</label>
                                     </div>
                                     
                                     <div id="autoReplySection" class="hidden">
-                                        <label class="block text-sm font-medium mb-1">Auto Reply Additional Prompt</label>
-                                        <textarea name="autoReplyPrompt" class="w-full border rounded px-3 py-2" rows="3" 
-                                                  placeholder="e.g. When the customer replies, respond with..."></textarea>
-                                        <div class="text-xs text-gray-500 mt-1">This prompt will be used for auto-replying to customer messages.</div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Auto-Reply Prompt</label>
+                                        <textarea name="autoReplyPrompt" rows="4" class="w-full border rounded-md px-3 py-2 text-sm" 
+                                                  placeholder="Enter the auto-reply prompt..."></textarea>
                                     </div>
-
-                                    <div class="border-t pt-4">
-                                        <h4 class="font-medium mb-2">Test Configuration</h4>
-                                        <div class="flex items-center space-x-2">
-                                            <select id="leads-test-record-select" class="border rounded px-3 py-2 text-sm flex-1">
-                                                <option value="">Select a record to test...</option>
-                                            </select>
-                                            <button type="button" id="leads-test-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
-                                                Test
-                                            </button>
-                                        </div>
+                                    
+                                    <div class="flex justify-end space-x-3">
+                                        <button type="button" onclick="closeAutoChatConfig()" 
+                                                class="px-4 py-2 text-sm border rounded hover:bg-gray-50">Cancel</button>
+                                        <button type="submit" class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                                            Save Configuration
+                                        </button>
                                     </div>
                                 </form>
                             </div>
@@ -888,16 +882,33 @@
                                     
                                     <div class="border-t pt-4">
                                         <h4 class="font-medium mb-2">Test API Configuration</h4>
-                                        <div class="flex items-center space-x-2">
-                                            <button type="button" id="test-api-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm">
+                                        <div class="flex space-x-3">
+                                            <button type="button" id="testApiBtn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
                                                 Test API
                                             </button>
-                                            <button type="button" id="view-data-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                                            <button type="button" id="viewDataBtn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm">
                                                 View Sample Data
                                             </button>
                                         </div>
-                                        <div id="api-test-result" class="mt-2 p-3 bg-gray-50 rounded hidden">
-                                            <pre class="text-xs overflow-auto max-h-32"></pre>
+                                        
+                                        <div id="api-test-result" class="hidden mt-4">
+                                            <div class="bg-gray-50 border rounded-lg p-4">
+                                                <h4 class="font-medium text-gray-800 mb-2">API Test Results</h4>
+                                                <div class="space-y-3">
+                                                    <div>
+                                                        <label class="block text-sm font-medium text-gray-700 mb-1">Request Details:</label>
+                                                        <textarea id="request-details" rows="4" class="w-full border rounded px-3 py-2 text-sm bg-white" readonly></textarea>
+                                                    </div>
+                                                    <div>
+                                                        <label class="block text-sm font-medium text-gray-700 mb-1">Response:</label>
+                                                        <textarea id="response-details" rows="6" class="w-full border rounded px-3 py-2 text-sm bg-white" readonly></textarea>
+                                                    </div>
+                                                    <div id="field-detection" class="hidden">
+                                                        <label class="block text-sm font-medium text-gray-700 mb-1">Field Detection:</label>
+                                                        <div id="detected-fields" class="bg-white border rounded px-3 py-2 text-sm"></div>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 </form>
