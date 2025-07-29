@@ -463,7 +463,7 @@
         // Update leads count
         const leadsCount = document.getElementById('leads-count');
         if (leadsCount) {
-            leadsCount.textContent = `${leadsFilteredData.length} leads`;
+            leadsCount.textContent = `${leadsFilteredData.length} of ${leadsData.length} leads`;
         }
     }
 
@@ -1474,7 +1474,8 @@
             const result = await response.json();
             console.log('Contact check result for', mobile, ':', result);
             
-            return result.exists;
+            // Return true if contact exists AND has proper name
+            return result.exists && result.hasProperName;
         } catch (err) {
             console.error('Error checking contact status for', mobile, ':', err);
             return false;
@@ -1501,7 +1502,7 @@
             console.log('Add contact result:', result);
             
             if (result.success) {
-                console.log('Contact added successfully:', result.contact);
+                console.log('Contact added/updated successfully:', result.contact);
                 return true;
             } else {
                 console.error('Failed to add contact:', result.error);
@@ -1625,22 +1626,22 @@
     window.toggleContactStatus = async function(mobile, name) {
         console.log('toggleContactStatus called for:', mobile, name);
         
-        // Check if this specific contact exists
+        // Check if this specific contact exists with proper name
         const isInContacts = contactsCache.get(mobile);
         console.log('Contact in cache for', mobile, ':', isInContacts);
         
         if (isInContacts) {
-            showLeadsStatus('Contact already exists in WhatsApp', 'info');
+            showLeadsStatus('Contact already exists in WhatsApp with proper name', 'info');
             return;
         }
         
         try {
-            showLeadsStatus('Adding contact to WhatsApp...', 'info');
+            showLeadsStatus('Adding/updating contact in WhatsApp...', 'info');
             const success = await addContact(mobile, name);
             if (success) {
                 // Update cache for this specific contact only
                 contactsCache.set(mobile, true);
-                showLeadsStatus('Contact added successfully!', 'success');
+                showLeadsStatus('Contact added/updated successfully!', 'success');
                 
                 // Update only this specific icon
                 const btn = document.querySelector(`[data-mobile="${mobile}"]`);
@@ -1653,7 +1654,7 @@
                     }
                 }
             } else {
-                showLeadsStatus('Failed to add contact', 'error');
+                showLeadsStatus('Failed to add/update contact', 'error');
             }
         } catch (err) {
             console.error('Error adding contact:', err);
