@@ -418,47 +418,125 @@
             return;
         }
         
-        leadsListContainer.innerHTML = leadsFilteredData.map(lead => {
-            const contactIconColor = contactsCache.get(lead.mobile) ? 'text-green-600' : 'text-red-600';
-            return `
-                <div class="border-b border-gray-200 py-3 px-4 hover:bg-gray-50">
-                    <div class="flex items-center justify-between">
-                        <div class="flex-1">
-                            <div class="flex items-center space-x-3">
-                                <div class="flex-1">
-                                    <div class="font-medium text-gray-900">${lead.name || 'Unknown'}</div>
-                                    <div class="text-sm text-gray-500">${lead.mobile}</div>
-                                    <div class="text-sm text-gray-500">${lead.email || 'No email'}</div>
-                                </div>
-                                <div class="flex items-center space-x-2">
-                                    <button onclick="toggleContactStatus('${lead.mobile}', '${lead.name || 'Unknown'}')" 
-                                            data-mobile="${lead.mobile}"
-                                            class="contact-status-btn p-2 rounded-full hover:bg-gray-100 transition-colors"
-                                            title="${contactsCache.get(lead.mobile) ? 'Contact exists in WhatsApp' : 'Click to add to WhatsApp contacts'}">
-                                        <svg class="contact-status-icon w-5 h-5 ${contactIconColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
-                                        </svg>
+        leadsListContainer.innerHTML = `
+            <table class="min-w-full bg-white">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lead</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mobile</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Inquiry</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Auto Chat</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="bg-white divide-y divide-gray-200">
+                    ${leadsFilteredData.map(lead => {
+                        const contactIconColor = contactsCache.get(lead.mobile) ? 'text-green-600' : 'text-red-600';
+                        return `
+                            <tr class="border-b hover:bg-gray-50">
+                                <td class="px-3 py-2">
+                                    <div class="flex items-center">
+                                        <div class="w-6 h-6 bg-blue-500 text-white rounded-full flex items-center justify-center text-xs font-semibold mr-2">
+                                            ${getTypeIcon(lead.Type)}
+                                        </div>
+                                        <div class="min-w-0 flex-1">
+                                            <div class="font-medium text-gray-900 truncate">${escapeHtml(lead.name)}</div>
+                                            <div class="text-xs text-gray-500 truncate">${escapeHtml(lead.email)}</div>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="px-3 py-2">
+                                    <div class="flex items-center justify-between">
+                                        <span class="text-sm text-gray-900 truncate">${escapeHtml(lead.mobile)}</span>
+                                        <div class="flex space-x-1 ml-2">
+                                            <button onclick="startChat('${lead.mobile}')" class="text-green-600 hover:text-green-800 p-1 rounded hover:bg-green-50" title="Start/Open Chat">
+                                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                                                </svg>
+                                            </button>
+                                            <button onclick="toggleContactStatus('${lead.mobile}', '${escapeHtml(lead.name)}')" 
+                                                    data-mobile="${lead.mobile}"
+                                                    class="contact-status-btn p-1 rounded hover:bg-gray-50" 
+                                                    title="${contactsCache.get(lead.mobile) ? 'Contact exists in WhatsApp' : 'Click to add to WhatsApp contacts'}">
+                                                <svg class="w-4 h-4 contact-status-icon ${contactIconColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td class="px-3 py-2">
+                                    <div class="max-w-xs">
+                                        <div class="text-xs text-gray-900 truncate">
+                                            ${lead.inquiry ? escapeHtml(lead.inquiry.substring(0, 30)) + (lead.inquiry.length > 30 ? '...' : '') : 'No inquiry'}
+                                        </div>
+                                        ${lead.inquiry && lead.inquiry.length > 30 ? `
+                                            <button onclick="showInquiryDetails('${escapeHtml(lead.inquiry)}')" class="text-blue-600 hover:text-blue-800 text-xs">
+                                                View full
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                </td>
+                                <td class="px-3 py-2">
+                                    <a href="${escapeHtml(lead.source_url)}" target="_blank" class="text-blue-600 hover:text-blue-800 hover:underline text-xs truncate block" title="${escapeHtml(lead.source_url)}">
+                                        ${getDomainFromUrl(lead.source_url)}
+                                    </a>
+                                </td>
+                                <td class="px-3 py-2 text-xs text-gray-500">
+                                    ${getTimeAgo(lead.created_on)}
+                                </td>
+                                <td class="px-3 py-2">
+                                    <div class="flex items-center space-x-2">
+                                        <label class="flex items-center">
+                                            <input type="checkbox" 
+                                                   ${lead.auto_chat_enabled ? 'checked' : ''} 
+                                                   onchange="toggleIndividualAutoChat('${lead.id}', this.checked)"
+                                                   class="mr-1 text-blue-600">
+                                            <span class="text-xs">Auto</span>
+                                        </label>
+                                        ${lead.auto_chat_logs && lead.auto_chat_logs.length > 0 ? `
+                                            <button onclick="showAutoChatLogs('${lead.id}')" 
+                                                    class="text-blue-600 hover:text-blue-800 text-xs bg-blue-50 px-2 py-1 rounded"
+                                                    title="View auto chat logs">
+                                                ${lead.auto_chat_logs.length} msgs
+                                            </button>
+                                        ` : ''}
+                                    </div>
+                                </td>
+                                <td class="px-3 py-2">
+                                    <button onclick="toggleLeadDetails(this, '${lead.id}')" class="text-blue-600 hover:text-blue-800 text-xs">
+                                        Details
                                     </button>
-                                    <button onclick="startChat('${lead.mobile}')" class="p-2 rounded-full hover:bg-gray-100 transition-colors" title="Start chat">
-                                        <svg class="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
-                                        </svg>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="mt-2 text-sm text-gray-600">
-                                <strong>Inquiry:</strong> ${lead.inquiry || 'No inquiry'}
-                            </div>
-                            <div class="mt-1 text-xs text-gray-500">
-                                <strong>Type:</strong> ${lead.Type || 'Unknown'} | 
-                                <strong>Source:</strong> ${lead.source_url || 'Unknown'} | 
-                                <strong>Created:</strong> ${new Date(lead.created_on).toLocaleDateString()}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }).join('');
+                                </td>
+                            </tr>
+                            <tr id="details-${lead.id}" class="hidden bg-gray-50">
+                                <td colspan="7" class="px-4 py-4">
+                                    <div class="grid grid-cols-2 gap-4 text-sm">
+                                        <div>
+                                            <strong>Full Name:</strong> ${escapeHtml(lead.name)}<br>
+                                            <strong>Email:</strong> ${escapeHtml(lead.email)}<br>
+                                            <strong>Mobile:</strong> ${escapeHtml(lead.mobile)}<br>
+                                            <strong>Type:</strong> ${escapeHtml(lead.Type)}<br>
+                                            <strong>Created:</strong> ${formatDateTime(lead.created_on)}<br>
+                                            <strong>Auto Chat:</strong> ${lead.auto_chat_enabled ? 'Enabled' : 'Disabled'}<br>
+                                            <strong>Auto Chat Messages:</strong> ${lead.auto_chat_logs ? lead.auto_chat_logs.length : 0}
+                                        </div>
+                                        <div>
+                                            <strong>Source URL:</strong> <a href="${escapeHtml(lead.source_url)}" target="_blank" class="text-blue-600 hover:text-blue-800">${escapeHtml(lead.source_url)}</a><br>
+                                            <strong>Inquiry:</strong> ${lead.inquiry ? escapeHtml(lead.inquiry) : 'No inquiry'}<br>
+                                            <strong>Additional Details:</strong><br>
+                                            <pre class="text-xs bg-white p-2 rounded border mt-1 overflow-auto max-h-32">${formatAdditionalDetails(lead.additional_details)}</pre>
+                                        </div>
+                                    </div>
+                                </td>
+                            </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
         
         // Update leads count
         const leadsCount = document.getElementById('leads-count');
