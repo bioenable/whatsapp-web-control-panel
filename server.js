@@ -2541,18 +2541,64 @@ app.post('/api/contacts/check', async (req, res) => {
         
         console.log('Normalized chat ID:', chatId);
         
-        // Try to get the chat
-        const chat = await client.getChatById(chatId);
-        
-        // If we can get the chat, the contact exists
-        const exists = chat && chat.id;
-        
-        console.log('Contact exists:', exists);
-        res.json({ exists: !!exists });
+        // Try to get the contact using WhatsApp Web.js methods
+        try {
+            const contact = await client.getContactById(chatId);
+            
+            if (contact) {
+                console.log('Contact found:', {
+                    id: contact.id,
+                    name: contact.name,
+                    number: contact.number,
+                    isMyContact: contact.isMyContact,
+                    isWAContact: contact.isWAContact,
+                    pushname: contact.pushname,
+                    shortName: contact.shortName
+                });
+                
+                // Contact exists if it's either in our contacts or is a WhatsApp user
+                const exists = contact.isMyContact || contact.isWAContact;
+                
+                res.json({ 
+                    exists: exists,
+                    contact: {
+                        id: contact.id,
+                        name: contact.name,
+                        number: contact.number,
+                        isMyContact: contact.isMyContact,
+                        isWAContact: contact.isWAContact,
+                        pushname: contact.pushname,
+                        shortName: contact.shortName
+                    }
+                });
+            } else {
+                console.log('Contact not found');
+                res.json({ exists: false });
+            }
+        } catch (contactErr) {
+            console.log('Error getting contact, trying chat method:', contactErr.message);
+            
+            // Fallback: try to get the chat
+            try {
+                const chat = await client.getChatById(chatId);
+                if (chat) {
+                    console.log('Chat found for contact');
+                    res.json({ exists: true, contact: { id: chat.id } });
+                } else {
+                    console.log('No chat found for contact');
+                    res.json({ exists: false });
+                }
+            } catch (chatErr) {
+                console.log('Contact not found (expected for new contacts):', chatErr.message);
+                res.json({ exists: false });
+            }
+        }
     } catch (err) {
-        console.log('Contact not found (expected for new contacts):', err.message);
-        // If chat doesn't exist, it will throw an error
-        res.json({ exists: false });
+        console.error('Error checking contact status:', err);
+        res.status(500).json({ 
+            error: 'Failed to check contact status', 
+            details: err.message 
+        });
     }
 });
 
@@ -2579,6 +2625,25 @@ app.post('/api/contacts/add', async (req, res) => {
             const existingChat = await client.getChatById(chatId);
             if (existingChat) {
                 console.log('Contact already exists');
+                
+                // If contact exists but name is missing, try to update it
+                if (name && existingChat.name !== name) {
+                    try {
+                        // Try to get the contact object to update name
+                        const contact = await client.getContactById(chatId);
+                        if (contact) {
+                            // Update contact name if different
+                            if (contact.name !== name) {
+                                console.log('Updating contact name from', contact.name, 'to', name);
+                                // Note: WhatsApp Web.js doesn't have a direct method to update contact name
+                                // The name will be updated when the contact is saved in phone contacts
+                            }
+                        }
+                    } catch (updateErr) {
+                        console.log('Could not update contact name:', updateErr.message);
+                    }
+                }
+                
                 return res.json({ success: true, message: 'Contact already exists' });
             }
         } catch (err) {
@@ -2586,14 +2651,36 @@ app.post('/api/contacts/add', async (req, res) => {
             // Contact doesn't exist, continue to add
         }
         
-        // Add contact to WhatsApp
-        const contact = await client.addContact({
+        // Add contact to WhatsApp with proper details
+        const contactData = {
             id: chatId,
-            name: name || `Contact ${normalizedNumber}`
+            name: name || `Contact ${normalizedNumber}`,
+            number: normalizedNumber
+        };
+        
+        console.log('Adding contact with data:', contactData);
+        
+        const contact = await client.addContact(contactData);
+        
+        console.log('Contact added successfully:', {
+            id: contact.id,
+            name: contact.name,
+            number: contact.number,
+            isMyContact: contact.isMyContact,
+            isWAContact: contact.isWAContact
         });
         
-        console.log('Contact added successfully:', contact.id);
-        res.json({ success: true, message: 'Contact added successfully' });
+        res.json({ 
+            success: true, 
+            message: 'Contact added successfully',
+            contact: {
+                id: contact.id,
+                name: contact.name,
+                number: contact.number,
+                isMyContact: contact.isMyContact,
+                isWAContact: contact.isWAContact
+            }
+        });
     } catch (err) {
         console.error('Error adding contact:', err);
         res.status(500).json({ 
