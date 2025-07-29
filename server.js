@@ -2509,3 +2509,102 @@ app.post('/api/contacts/add', async (req, res) => {
     }
 });
 
+// Test leads API configuration
+app.post('/api/test-leads-api', async (req, res) => {
+    try {
+        const { url, method, headers, body, fieldMapping } = req.body;
+        
+        if (!url) {
+            return res.status(400).json({ error: 'API URL is required' });
+        }
+        
+        const requestOptions = {
+            method: method || 'GET',
+            headers: headers || {}
+        };
+        
+        if (method === 'POST' && body) {
+            requestOptions.body = JSON.stringify(body);
+            if (!requestOptions.headers['Content-Type']) {
+                requestOptions.headers['Content-Type'] = 'application/json';
+            }
+        }
+        
+        const response = await fetch(url, requestOptions);
+        
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        // If field mapping is provided, process the data
+        let processedData = data;
+        if (fieldMapping) {
+            processedData = processLeadsDataWithMapping(data, fieldMapping);
+        }
+        
+        res.json({
+            success: true,
+            data: data,
+            processedData: processedData
+        });
+    } catch (err) {
+        console.error('API test error:', err);
+        res.status(500).json({ 
+            success: false, 
+            error: 'Failed to test API', 
+            details: err.message 
+        });
+    }
+});
+
+// Process leads data with field mapping
+function processLeadsDataWithMapping(data, fieldMapping) {
+    if (!Array.isArray(data)) {
+        return data;
+    }
+    
+    return data.map(item => ({
+        name: item[fieldMapping.name] || '',
+        email: item[fieldMapping.email] || '',
+        mobile: item[fieldMapping.mobile] || '',
+        inquiry: item[fieldMapping.inquiry] || '',
+        source_url: item[fieldMapping.source_url] || '',
+        created_on: item[fieldMapping.created_on] || new Date().toISOString(),
+        Type: item[fieldMapping.Type] || 'Inquiry',
+        additional_details: item[fieldMapping.additional_details] || {}
+    }));
+}
+
+// Get leads configuration
+app.get('/api/leads-config', (req, res) => {
+    try {
+        const configPath = path.join(__dirname, 'leads-config.json');
+        if (!fs.existsSync(configPath)) {
+            return res.status(404).json({ error: 'Leads configuration file not found' });
+        }
+        
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        res.json(config);
+    } catch (err) {
+        console.error('Error reading leads config:', err);
+        res.status(500).json({ error: 'Failed to read leads configuration' });
+    }
+});
+
+// Save leads configuration
+app.post('/api/leads-config', (req, res) => {
+    try {
+        const config = req.body;
+        const configPath = path.join(__dirname, 'leads-config.json');
+        
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+        
+        res.json({ success: true, message: 'Configuration saved successfully' });
+    } catch (err) {
+        console.error('Error saving leads config:', err);
+        res.status(500).json({ error: 'Failed to save leads configuration' });
+    }
+});
+

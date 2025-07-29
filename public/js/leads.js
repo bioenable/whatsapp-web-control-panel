@@ -80,6 +80,12 @@
             leadsAutoChatForm.addEventListener('submit', saveAutoChatConfig);
         }
 
+        // Data configuration form
+        const leadsDataConfigForm = document.getElementById('leads-data-config-form');
+        if (leadsDataConfigForm) {
+            leadsDataConfigForm.addEventListener('submit', saveDataConfig);
+        }
+
         // Handle auto reply section visibility
         const autoReplyCheckbox = document.getElementById('autoReply');
         const autoReplySection = document.getElementById('autoReplySection');
@@ -103,6 +109,43 @@
         const leadsAddContactsBtn = document.getElementById('leads-add-contacts-btn');
         if (leadsAddContactsBtn) {
             leadsAddContactsBtn.addEventListener('click', addAllLeadsToContacts);
+        }
+
+        // Tab switching functionality
+        const tabButtons = document.querySelectorAll('.tab-btn');
+        const tabContents = document.querySelectorAll('.tab-content');
+        
+        tabButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const targetTab = btn.getAttribute('data-tab');
+                
+                // Update active tab button
+                tabButtons.forEach(b => {
+                    b.classList.remove('active', 'border-blue-500', 'text-blue-600');
+                    b.classList.add('border-transparent', 'text-gray-500');
+                });
+                btn.classList.add('active', 'border-blue-500', 'text-blue-600');
+                btn.classList.remove('border-transparent', 'text-gray-500');
+                
+                // Show target tab content
+                tabContents.forEach(content => {
+                    content.classList.add('hidden');
+                });
+                document.getElementById(`${targetTab}-tab`).classList.remove('hidden');
+            });
+        });
+
+        // API test functionality
+        const testApiBtn = document.getElementById('test-api-btn');
+        const viewDataBtn = document.getElementById('view-data-btn');
+        const apiTestResult = document.getElementById('api-test-result');
+        
+        if (testApiBtn) {
+            testApiBtn.addEventListener('click', testApiConfiguration);
+        }
+        
+        if (viewDataBtn) {
+            viewDataBtn.addEventListener('click', viewSampleData);
         }
 
         // Cancel button
@@ -159,51 +202,78 @@
         }
     }
 
-    // Fetch leads from external API via proxy
-    function fetchLeadsFromAPI() {
-        // Show loading state
+    // Fetch leads from API
+    async function fetchLeadsFromAPI() {
         if (leadsRefreshBtn) {
             leadsRefreshBtn.textContent = 'Loading...';
             leadsRefreshBtn.disabled = true;
         }
 
-        // Show status in the leads tab
-        showLeadsStatus('Fetching leads from API...', 'info');
-
-        fetch('/api/proxy/leads', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
+        try {
+            // Load configuration
+            const configResponse = await fetch('/api/leads-config');
+            const config = await configResponse.json();
+            
+            if (!config.apiConfig) {
+                throw new Error('API configuration not found');
             }
-        })
-        .then(res => {
-            if (!res.ok) {
-                throw new Error(`HTTP error! status: ${res.status}`);
+            
+            const { url, method, headers, body } = config.apiConfig;
+            
+            const requestOptions = {
+                method: method || 'GET',
+                headers: headers || {}
+            };
+            
+            if (method === 'POST' && body) {
+                requestOptions.body = JSON.stringify(body);
+                if (!requestOptions.headers['Content-Type']) {
+                    requestOptions.headers['Content-Type'] = 'application/json';
+                }
             }
-            return res.json();
-        })
-        .then(data => {
-            if (data.success && data.data) {
-                processNewLeads(data.data);
-                console.log(`Successfully fetched ${data.data.length} leads from API`);
-                showLeadsStatus(`Successfully fetched ${data.data.length} leads from API`, 'success');
-            } else {
-                const errorMsg = data.error || 'API returned an error response';
-                console.error('API returned error:', data);
-                showLeadsStatus(`Failed to fetch leads: ${errorMsg}`, 'error');
+            
+            const response = await fetch(url, requestOptions);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
-        })
-        .catch(err => {
-            console.error('Failed to fetch leads from API:', err);
-            showLeadsStatus(`Failed to fetch leads from API: ${err.message}`, 'error');
-        })
-        .finally(() => {
-            // Reset button state
+            
+            const data = await response.json();
+            
+            // Process data with field mapping
+            const processedData = processLeadsDataWithMapping(data, config.apiConfig.fieldMapping);
+            
+            // Process new leads
+            processNewLeads(processedData);
+            
+            showLeadsStatus(`Successfully fetched ${processedData.length} leads`, 'success');
+        } catch (err) {
+            console.error('Error fetching leads:', err);
+            showLeadsStatus(`Error fetching leads: ${err.message}`, 'error');
+        } finally {
             if (leadsRefreshBtn) {
                 leadsRefreshBtn.textContent = 'Refresh';
                 leadsRefreshBtn.disabled = false;
             }
-        });
+        }
+    }
+
+    // Process leads data with field mapping
+    function processLeadsDataWithMapping(data, fieldMapping) {
+        if (!Array.isArray(data)) {
+            return [];
+        }
+        
+        return data.map(item => ({
+            name: item[fieldMapping.name] || '',
+            email: item[fieldMapping.email] || '',
+            mobile: item[fieldMapping.mobile] || '',
+            inquiry: item[fieldMapping.inquiry] || '',
+            source_url: item[fieldMapping.source_url] || '',
+            created_on: item[fieldMapping.created_on] || new Date().toISOString(),
+            Type: item[fieldMapping.Type] || 'Inquiry',
+            additional_details: item[fieldMapping.additional_details] || {}
+        }));
     }
 
     // Process new leads and update local storage - COMPREHENSIVE DUPLICATE PREVENTION
@@ -764,36 +834,75 @@
         }
     }
 
+    // Populate auto chat form with current configuration
     async function populateAutoChatForm() {
-        const form = leadsAutoChatForm;
-        if (!form) return;
-
-        // Ensure we have the latest config
-        await loadAutoChatConfig();
-
-        // Populate form fields with current config
-        const systemPromptField = form.querySelector('[name="systemPrompt"]');
-        const includeJsonField = form.querySelector('[name="includeJsonContext"]');
-        const autoReplyField = form.querySelector('[name="autoReply"]');
-        const autoReplyPromptField = form.querySelector('[name="autoReplyPrompt"]');
-
-        if (systemPromptField) systemPromptField.value = autoChatConfig.systemPrompt || '';
-        if (includeJsonField) includeJsonField.checked = autoChatConfig.includeJsonContext;
-        if (autoReplyField) autoReplyField.checked = autoChatConfig.autoReply;
-        if (autoReplyPromptField) autoReplyPromptField.value = autoChatConfig.autoReplyPrompt || '';
-
-        // Show/hide auto reply section based on checkbox state
-        const autoReplySection = document.getElementById('autoReplySection');
-        if (autoReplySection) {
-            if (autoChatConfig.autoReply) {
-                autoReplySection.classList.remove('hidden');
-            } else {
-                autoReplySection.classList.add('hidden');
+        try {
+            const configResponse = await fetch('/api/leads-config');
+            const config = await configResponse.json();
+            
+            // Populate auto chat form
+            if (leadsAutoChatForm) {
+                const systemPromptField = leadsAutoChatForm.querySelector('[name="systemPrompt"]');
+                const includeJsonContextField = leadsAutoChatForm.querySelector('[name="includeJsonContext"]');
+                const autoReplyField = leadsAutoChatForm.querySelector('[name="autoReply"]');
+                const autoReplyPromptField = leadsAutoChatForm.querySelector('[name="autoReplyPrompt"]');
+                
+                if (systemPromptField) systemPromptField.value = config.systemPrompt || '';
+                if (includeJsonContextField) includeJsonContextField.checked = config.includeJsonContext || false;
+                if (autoReplyField) autoReplyField.checked = config.autoReply || false;
+                if (autoReplyPromptField) autoReplyPromptField.value = config.autoReplyPrompt || '';
+                
+                // Show/hide auto reply section
+                const autoReplySection = document.getElementById('autoReplySection');
+                if (autoReplySection) {
+                    if (config.autoReply) {
+                        autoReplySection.classList.remove('hidden');
+                    } else {
+                        autoReplySection.classList.add('hidden');
+                    }
+                }
             }
+            
+            // Populate data configuration form
+            if (leadsDataConfigForm) {
+                const apiConfig = config.apiConfig || {};
+                const fieldMapping = apiConfig.fieldMapping || {};
+                
+                const apiUrlField = leadsDataConfigForm.querySelector('[name="apiUrl"]');
+                const apiMethodField = leadsDataConfigForm.querySelector('[name="apiMethod"]');
+                const refreshFrequencyField = leadsDataConfigForm.querySelector('[name="refreshFrequency"]');
+                const apiHeadersField = leadsDataConfigForm.querySelector('[name="apiHeaders"]');
+                const apiBodyField = leadsDataConfigForm.querySelector('[name="apiBody"]');
+                
+                if (apiUrlField) apiUrlField.value = apiConfig.url || '';
+                if (apiMethodField) apiMethodField.value = apiConfig.method || 'POST';
+                if (refreshFrequencyField) refreshFrequencyField.value = Math.floor((apiConfig.refreshFrequency || 300000) / 1000);
+                if (apiHeadersField) apiHeadersField.value = JSON.stringify(apiConfig.headers || {}, null, 2);
+                if (apiBodyField) apiBodyField.value = JSON.stringify(apiConfig.body || {}, null, 2);
+                
+                // Populate field mapping
+                const fieldNameField = leadsDataConfigForm.querySelector('[name="fieldName"]');
+                const fieldEmailField = leadsDataConfigForm.querySelector('[name="fieldEmail"]');
+                const fieldMobileField = leadsDataConfigForm.querySelector('[name="fieldMobile"]');
+                const fieldInquiryField = leadsDataConfigForm.querySelector('[name="fieldInquiry"]');
+                const fieldSourceUrlField = leadsDataConfigForm.querySelector('[name="fieldSourceUrl"]');
+                const fieldCreatedOnField = leadsDataConfigForm.querySelector('[name="fieldCreatedOn"]');
+                const fieldTypeField = leadsDataConfigForm.querySelector('[name="fieldType"]');
+                const fieldAdditionalDetailsField = leadsDataConfigForm.querySelector('[name="fieldAdditionalDetails"]');
+                
+                if (fieldNameField) fieldNameField.value = fieldMapping.name || 'name';
+                if (fieldEmailField) fieldEmailField.value = fieldMapping.email || 'email';
+                if (fieldMobileField) fieldMobileField.value = fieldMapping.mobile || 'mobile';
+                if (fieldInquiryField) fieldInquiryField.value = fieldMapping.inquiry || 'inquiry';
+                if (fieldSourceUrlField) fieldSourceUrlField.value = fieldMapping.source_url || 'source_url';
+                if (fieldCreatedOnField) fieldCreatedOnField.value = fieldMapping.created_on || 'created_on';
+                if (fieldTypeField) fieldTypeField.value = fieldMapping.Type || 'Type';
+                if (fieldAdditionalDetailsField) fieldAdditionalDetailsField.value = fieldMapping.additional_details || 'additional_details';
+            }
+            
+        } catch (err) {
+            console.error('Error populating configuration forms:', err);
         }
-
-        // Populate test record select
-        populateTestRecordSelect();
     }
 
     function populateTestRecordSelect() {
@@ -810,49 +919,106 @@
         });
     }
 
+    // Save auto chat configuration
     async function saveAutoChatConfig(e) {
-        if (e) e.preventDefault();
+        e.preventDefault();
         
-        // Only update from form if form exists and is visible
-        if (leadsAutoChatForm && !leadsAutoChatModal.classList.contains('hidden')) {
-            const formData = new FormData(leadsAutoChatForm);
-            
-            autoChatConfig = {
-                enabled: autoChatConfig.enabled, // Keep current toggle state
-                systemPrompt: formData.get('systemPrompt') || '',
-                includeJsonContext: formData.get('includeJsonContext') === 'on',
-                autoReply: formData.get('autoReply') === 'on',
-                autoReplyPrompt: formData.get('autoReplyPrompt') || ''
-            };
-        }
-
+        const formData = new FormData(e.target);
+        const autoChatConfig = {
+            enabled: autoChatConfig.enabled,
+            systemPrompt: formData.get('systemPrompt'),
+            includeJsonContext: formData.get('includeJsonContext') === 'on',
+            autoReply: formData.get('autoReply') === 'on',
+            autoReplyPrompt: formData.get('autoReplyPrompt')
+        };
+        
         try {
-            // Save to server
-            const response = await fetch('/api/leads/config', {
+            // Load existing config
+            const configResponse = await fetch('/api/leads-config');
+            const config = await configResponse.json();
+            
+            // Update auto chat config
+            config.enabled = autoChatConfig.enabled;
+            config.systemPrompt = autoChatConfig.systemPrompt;
+            config.includeJsonContext = autoChatConfig.includeJsonContext;
+            config.autoReply = autoChatConfig.autoReply;
+            config.autoReplyPrompt = autoChatConfig.autoReplyPrompt;
+            
+            // Save updated config
+            const saveResponse = await fetch('/api/leads-config', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(autoChatConfig)
+                body: JSON.stringify(config)
             });
             
-            if (response.ok) {
-                const result = await response.json();
-                console.log('Auto chat config saved to server successfully:', result);
-                // Also save to localStorage as backup
-                localStorage.setItem('leadsAutoChatConfig', JSON.stringify(autoChatConfig));
-                if (e) showLeadsStatus('Auto chat configuration saved successfully', 'success');
-            } else {
-                throw new Error('Failed to save config to server');
+            if (!saveResponse.ok) {
+                throw new Error('Failed to save configuration');
             }
+            
+            showLeadsStatus('Auto chat configuration saved successfully!', 'success');
+            closeAutoChatConfig();
+            
+            // Update local config
+            autoChatConfig = autoChatConfig;
+            
         } catch (err) {
-            console.error('Error saving auto chat config to server, using localStorage:', err);
-            // Fallback to localStorage
-            localStorage.setItem('leadsAutoChatConfig', JSON.stringify(autoChatConfig));
-            if (e) showLeadsStatus('Configuration saved to local storage (server unavailable)', 'warning');
+            console.error('Error saving auto chat config:', err);
+            showLeadsStatus('Failed to save auto chat configuration', 'error');
         }
+    }
+
+    // Save data configuration
+    async function saveDataConfig(e) {
+        e.preventDefault();
         
-        if (e) closeAutoChatConfig();
+        const formData = new FormData(e.target);
+        const dataConfig = {
+            url: formData.get('apiUrl'),
+            method: formData.get('apiMethod'),
+            headers: JSON.parse(formData.get('apiHeaders') || '{}'),
+            body: JSON.parse(formData.get('apiBody') || '{}'),
+            refreshFrequency: parseInt(formData.get('refreshFrequency')) * 1000, // Convert to milliseconds
+            fieldMapping: {
+                name: formData.get('fieldName'),
+                email: formData.get('fieldEmail'),
+                mobile: formData.get('fieldMobile'),
+                inquiry: formData.get('fieldInquiry'),
+                source_url: formData.get('fieldSourceUrl'),
+                created_on: formData.get('fieldCreatedOn'),
+                Type: formData.get('fieldType'),
+                additional_details: formData.get('fieldAdditionalDetails')
+            }
+        };
+        
+        try {
+            // Load existing config
+            const configResponse = await fetch('/api/leads-config');
+            const config = await configResponse.json();
+            
+            // Update API config
+            config.apiConfig = dataConfig;
+            
+            // Save updated config
+            const saveResponse = await fetch('/api/leads-config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(config)
+            });
+            
+            if (!saveResponse.ok) {
+                throw new Error('Failed to save configuration');
+            }
+            
+            showLeadsStatus('Data configuration saved successfully!', 'success');
+            
+        } catch (err) {
+            console.error('Error saving data config:', err);
+            showLeadsStatus('Failed to save data configuration', 'error');
+        }
     }
 
     async function loadAutoChatConfig() {
@@ -1274,47 +1440,6 @@
         }
     }
 
-    async function addAllLeadsToContacts() {
-        const leadsToAdd = leadsFilteredData.filter(lead => !contactsCache.get(lead.mobile));
-        
-        if (leadsToAdd.length === 0) {
-            showLeadsStatus('All leads are already in contacts!', 'success');
-            return;
-        }
-
-        showLeadsStatus(`Adding ${leadsToAdd.length} leads to contacts...`, 'info');
-        
-        let successCount = 0;
-        let failCount = 0;
-        
-        for (const lead of leadsToAdd) {
-            try {
-                const success = await addContact(lead.mobile, lead.name);
-                if (success) {
-                    contactsCache.set(lead.mobile, true);
-                    successCount++;
-                } else {
-                    failCount++;
-                }
-                
-                // Small delay to avoid overwhelming the server
-                await new Promise(resolve => setTimeout(resolve, 100));
-            } catch (err) {
-                console.error(`Failed to add contact for ${lead.mobile}:`, err);
-                failCount++;
-            }
-        }
-        
-        if (successCount > 0) {
-            showLeadsStatus(`Successfully added ${successCount} contacts${failCount > 0 ? `, ${failCount} failed` : ''}`, 'success');
-        } else {
-            showLeadsStatus(`Failed to add any contacts. ${failCount} errors.`, 'error');
-        }
-        
-        // Refresh the list to update contact status icons
-        renderLeadsList();
-    }
-
     // Toggle contact status (add if not in contacts)
     window.toggleContactStatus = async function(mobile, name) {
         const isInContacts = contactsCache.get(mobile);
@@ -1346,6 +1471,56 @@
             console.error('Error adding contact:', err);
             showLeadsStatus('Error adding contact', 'error');
         }
+    }
+
+    // Make addAllLeadsToContacts globally accessible
+    window.addAllLeadsToContacts = async function() {
+        console.log('addAllLeadsToContacts called');
+        const leadsToAdd = leadsFilteredData.filter(lead => !contactsCache.get(lead.mobile));
+        
+        console.log('Leads to add:', leadsToAdd.length);
+        console.log('Total filtered leads:', leadsFilteredData.length);
+        console.log('Contacts cache size:', contactsCache.size);
+        
+        if (leadsToAdd.length === 0) {
+            showLeadsStatus('All leads are already in contacts!', 'success');
+            return;
+        }
+
+        showLeadsStatus(`Adding ${leadsToAdd.length} leads to contacts...`, 'info');
+        
+        let successCount = 0;
+        let failCount = 0;
+        
+        for (const lead of leadsToAdd) {
+            try {
+                console.log(`Adding contact for ${lead.mobile} (${lead.name})`);
+                const success = await addContact(lead.mobile, lead.name);
+                if (success) {
+                    contactsCache.set(lead.mobile, true);
+                    successCount++;
+                    console.log(`Successfully added ${lead.mobile}`);
+                } else {
+                    failCount++;
+                    console.log(`Failed to add ${lead.mobile}`);
+                }
+                
+                // Small delay to avoid overwhelming the server
+                await new Promise(resolve => setTimeout(resolve, 100));
+            } catch (err) {
+                console.error(`Failed to add contact for ${lead.mobile}:`, err);
+                failCount++;
+            }
+        }
+        
+        if (successCount > 0) {
+            showLeadsStatus(`Successfully added ${successCount} contacts${failCount > 0 ? `, ${failCount} failed` : ''}`, 'success');
+        } else {
+            showLeadsStatus(`Failed to add any contacts. ${failCount} errors.`, 'error');
+        }
+        
+        // Refresh the list to update contact status icons
+        renderLeadsList();
     }
 
     // Check contact status for all leads
@@ -1380,6 +1555,92 @@
                 }
             }
         });
+    }
+
+    // Test API configuration
+    async function testApiConfiguration() {
+        const form = document.getElementById('leads-data-config-form');
+        const formData = new FormData(form);
+        
+        const config = {
+            url: formData.get('apiUrl'),
+            method: formData.get('apiMethod'),
+            headers: JSON.parse(formData.get('apiHeaders') || '{}'),
+            body: JSON.parse(formData.get('apiBody') || '{}')
+        };
+        
+        try {
+            showLeadsStatus('Testing API configuration...', 'info');
+            
+            const response = await fetch('/api/test-leads-api', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(config)
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                showLeadsStatus('API test successful!', 'success');
+                apiTestResult.classList.remove('hidden');
+                apiTestResult.querySelector('pre').textContent = JSON.stringify(result.data, null, 2);
+            } else {
+                showLeadsStatus(`API test failed: ${result.error}`, 'error');
+            }
+        } catch (err) {
+            console.error('API test error:', err);
+            showLeadsStatus('API test failed', 'error');
+        }
+    }
+
+    // View sample data
+    async function viewSampleData() {
+        const form = document.getElementById('leads-data-config-form');
+        const formData = new FormData(form);
+        
+        const config = {
+            url: formData.get('apiUrl'),
+            method: formData.get('apiMethod'),
+            headers: JSON.parse(formData.get('apiHeaders') || '{}'),
+            body: JSON.parse(formData.get('apiBody') || '{}'),
+            fieldMapping: {
+                name: formData.get('fieldName'),
+                email: formData.get('fieldEmail'),
+                mobile: formData.get('fieldMobile'),
+                inquiry: formData.get('fieldInquiry'),
+                source_url: formData.get('fieldSourceUrl'),
+                created_on: formData.get('fieldCreatedOn'),
+                Type: formData.get('fieldType'),
+                additional_details: formData.get('fieldAdditionalDetails')
+            }
+        };
+        
+        try {
+            showLeadsStatus('Fetching sample data...', 'info');
+            
+            const response = await fetch('/api/test-leads-api', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(config)
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                showLeadsStatus('Sample data fetched successfully!', 'success');
+                apiTestResult.classList.remove('hidden');
+                apiTestResult.querySelector('pre').textContent = JSON.stringify(result.processedData, null, 2);
+            } else {
+                showLeadsStatus(`Failed to fetch sample data: ${result.error}`, 'error');
+            }
+        } catch (err) {
+            console.error('Sample data error:', err);
+            showLeadsStatus('Failed to fetch sample data', 'error');
+        }
     }
 
     // Initialize when DOM is loaded

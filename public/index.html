@@ -19,6 +19,26 @@
       }
     </script>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:400,500,600,700&display=swap">
+    <style>
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #ef4444;
+            border-color: #dc2626;
+        }
+        .toggle-checkbox:checked + .toggle-label .toggle-dot {
+            transform: translateX(2rem);
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+            }
+            50% {
+                box-shadow: 0 0 0 10px rgba(239, 68, 68, 0);
+            }
+        }
+    </style>
 </head>
 <body class="bg-gray-100 font-sans">
     <nav class="bg-green-600 shadow">
@@ -665,18 +685,34 @@
                             <div class="flex items-center space-x-3">
                                 <div class="flex items-center space-x-2">
                                     <label class="flex items-center">
-                                        <input type="checkbox" id="leads-auto-chat-toggle" class="mr-2">
-                                        <span class="text-sm font-medium">Auto Chat with New Lead</span>
+                                        <input type="checkbox" id="leads-auto-chat-toggle" class="sr-only">
+                                        <div class="relative w-16 h-8 bg-gray-200 rounded-full transition-colors duration-200 ease-in-out border-2 border-gray-300 hover:border-gray-400">
+                                            <div class="absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                        </div>
+                                        <span class="ml-3 text-sm font-medium text-gray-700">Auto chat with New Lead</span>
                                     </label>
-                                    <button id="leads-auto-chat-config-btn" class="text-blue-600 hover:text-blue-800 text-sm">
-                                        Configure
-                                    </button>
                                 </div>
-                                <button id="leads-refresh-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm">
-                                    Refresh
+                                <button id="leads-auto-chat-config-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm flex items-center space-x-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    </svg>
+                                    <span>Configure</span>
                                 </button>
-                                <button id="leads-add-contacts-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
-                                    Add All to Contacts
+                                <button id="leads-refresh-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm flex items-center space-x-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    <span>Refresh</span>
+                                </button>
+                                <button id="leads-add-contacts-btn" onclick="addAllLeadsToContacts()" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 text-sm flex items-center space-x-2">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                    </svg>
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                                    </svg>
+                                    <span>Add All to Contacts</span>
                                 </button>
                             </div>
                         </div>
@@ -694,6 +730,43 @@
                                     </select>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- Auto Chat Toggle with improved styling -->
+                        <div class="mb-4">
+                            <label class="flex items-center cursor-pointer">
+                                <input type="checkbox" id="leads-auto-chat-toggle" class="toggle-checkbox sr-only">
+                                <div class="toggle-label relative w-16 h-8 bg-gray-200 rounded-full transition-colors duration-200 ease-in-out border-2 border-gray-300 hover:border-gray-400">
+                                    <div class="toggle-dot absolute left-1 top-1 bg-white w-6 h-6 rounded-full transition-transform duration-200 ease-in-out transform"></div>
+                                </div>
+                                <span class="ml-3 text-sm font-medium text-gray-700">Auto chat with New Lead</span>
+                            </label>
+                        </div>
+
+                        <!-- Action Buttons -->
+                        <div class="flex items-center space-x-3 mb-4">
+                            <button id="leads-auto-chat-config-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm flex items-center space-x-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                </svg>
+                                <span>Configure</span>
+                            </button>
+                            <button id="leads-refresh-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm flex items-center space-x-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                </svg>
+                                <span>Refresh</span>
+                            </button>
+                            <button id="leads-add-contacts-btn" onclick="addAllLeadsToContacts()" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 text-sm flex items-center space-x-2">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                </svg>
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                                </svg>
+                                <span>Add All to Contacts</span>
+                            </button>
                         </div>
 
                         <div id="leads-list-container" class="overflow-x-auto">
@@ -718,51 +791,159 @@
 
                     <!-- Auto Chat Configuration Modal -->
                     <div id="leads-auto-chat-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
-                        <div class="bg-white rounded-lg shadow-lg w-full max-w-2xl p-6 relative">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-4xl p-6 relative max-h-[90vh] overflow-y-auto">
                             <button id="close-leads-auto-chat-modal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700 text-2xl">&times;</button>
-                            <h3 class="text-lg font-semibold mb-4">Auto Chat Configuration</h3>
-                            <form id="leads-auto-chat-form" class="space-y-4">
-                                <div>
-                                    <label class="block text-sm font-medium mb-1">System Prompt</label>
-                                    <textarea name="systemPrompt" class="w-full border rounded px-3 py-2" rows="4" 
-                                              placeholder="e.g. You are a helpful sales assistant. Your goal is to engage with leads and convert them into customers..."></textarea>
-                                    <div class="text-xs text-gray-500 mt-1">This prompt will be used to generate initial messages for new leads.</div>
-                                </div>
-                                
-                                <div class="flex items-center space-x-2">
-                                    <input type="checkbox" name="includeJsonContext" id="includeJsonContext" class="mr-2">
-                                    <label for="includeJsonContext" class="text-sm font-medium">Include JSON record as context</label>
-                                </div>
-                                
-                                <div class="flex items-center space-x-2">
-                                    <input type="checkbox" name="autoReply" id="autoReply" class="mr-2">
-                                    <label for="autoReply" class="text-sm font-medium">Enable Auto Reply</label>
-                                </div>
-                                
-                                <div id="autoReplySection" class="hidden">
-                                    <label class="block text-sm font-medium mb-1">Auto Reply Additional Prompt</label>
-                                    <textarea name="autoReplyPrompt" class="w-full border rounded px-3 py-2" rows="3" 
-                                              placeholder="e.g. When the customer replies, respond with..."></textarea>
-                                    <div class="text-xs text-gray-500 mt-1">This prompt will be used for auto-replying to customer messages.</div>
-                                </div>
-
-                                <div class="border-t pt-4">
-                                    <h4 class="font-medium mb-2">Test Configuration</h4>
-                                    <div class="flex items-center space-x-2">
-                                        <select id="leads-test-record-select" class="border rounded px-3 py-2 text-sm flex-1">
-                                            <option value="">Select a record to test...</option>
-                                        </select>
-                                        <button type="button" id="leads-test-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
-                                            Test
-                                        </button>
+                            <h3 class="text-lg font-semibold mb-4">Leads Configuration</h3>
+                            
+                            <!-- Tab Navigation -->
+                            <div class="border-b border-gray-200 mb-6">
+                                <nav class="flex space-x-8">
+                                    <button class="tab-btn active py-2 px-1 border-b-2 border-blue-500 text-blue-600 font-medium text-sm" data-tab="auto-chat">
+                                        Auto Chat Configuration
+                                    </button>
+                                    <button class="tab-btn py-2 px-1 border-b-2 border-transparent text-gray-500 hover:text-gray-700 font-medium text-sm" data-tab="data-config">
+                                        Data Configuration
+                                    </button>
+                                </nav>
+                            </div>
+                            
+                            <!-- Auto Chat Configuration Tab -->
+                            <div id="auto-chat-tab" class="tab-content">
+                                <form id="leads-auto-chat-form" class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium mb-1">System Prompt</label>
+                                        <textarea name="systemPrompt" class="w-full border rounded px-3 py-2" rows="4" 
+                                                  placeholder="e.g. You are a helpful sales assistant. Your goal is to engage with leads and convert them into customers..."></textarea>
+                                        <div class="text-xs text-gray-500 mt-1">This prompt will be used to generate initial messages for new leads.</div>
                                     </div>
-                                </div>
+                                    
+                                    <div class="flex items-center space-x-2">
+                                        <input type="checkbox" name="includeJsonContext" id="includeJsonContext" class="mr-2">
+                                        <label for="includeJsonContext" class="text-sm font-medium">Include JSON record as context</label>
+                                    </div>
+                                    
+                                    <div class="flex items-center space-x-2">
+                                        <input type="checkbox" name="autoReply" id="autoReply" class="mr-2">
+                                        <label for="autoReply" class="text-sm font-medium">Enable Auto Reply</label>
+                                    </div>
+                                    
+                                    <div id="autoReplySection" class="hidden">
+                                        <label class="block text-sm font-medium mb-1">Auto Reply Additional Prompt</label>
+                                        <textarea name="autoReplyPrompt" class="w-full border rounded px-3 py-2" rows="3" 
+                                                  placeholder="e.g. When the customer replies, respond with..."></textarea>
+                                        <div class="text-xs text-gray-500 mt-1">This prompt will be used for auto-replying to customer messages.</div>
+                                    </div>
 
-                                <div class="flex justify-end gap-2 pt-4 border-t">
-                                    <button type="button" id="cancel-leads-auto-chat-btn" class="px-4 py-2 rounded border">Cancel</button>
-                                    <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Save Configuration</button>
-                                </div>
-                            </form>
+                                    <div class="border-t pt-4">
+                                        <h4 class="font-medium mb-2">Test Configuration</h4>
+                                        <div class="flex items-center space-x-2">
+                                            <select id="leads-test-record-select" class="border rounded px-3 py-2 text-sm flex-1">
+                                                <option value="">Select a record to test...</option>
+                                            </select>
+                                            <button type="button" id="leads-test-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                                                Test
+                                            </button>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+                            
+                            <!-- Data Configuration Tab -->
+                            <div id="data-config-tab" class="tab-content hidden">
+                                <form id="leads-data-config-form" class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium mb-1">API URL</label>
+                                        <input type="url" name="apiUrl" class="w-full border rounded px-3 py-2" 
+                                               placeholder="https://api.example.com/leads">
+                                        <div class="text-xs text-gray-500 mt-1">The URL to fetch leads data from.</div>
+                                    </div>
+                                    
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium mb-1">Request Method</label>
+                                            <select name="apiMethod" class="w-full border rounded px-3 py-2">
+                                                <option value="GET">GET</option>
+                                                <option value="POST" selected>POST</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium mb-1">Refresh Frequency (seconds)</label>
+                                            <input type="number" name="refreshFrequency" class="w-full border rounded px-3 py-2" 
+                                                   value="300" min="30" max="3600">
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="block text-sm font-medium mb-1">Request Headers (JSON)</label>
+                                        <textarea name="apiHeaders" class="w-full border rounded px-3 py-2" rows="3" 
+                                                  placeholder='{"Content-Type": "application/json"}'></textarea>
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="block text-sm font-medium mb-1">Request Body (JSON)</label>
+                                        <textarea name="apiBody" class="w-full border rounded px-3 py-2" rows="3" 
+                                                  placeholder='{"apikey": "your-api-key"}'></textarea>
+                                    </div>
+                                    
+                                    <div class="border-t pt-4">
+                                        <h4 class="font-medium mb-2">Field Mapping</h4>
+                                        <div class="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Name Field</label>
+                                                <input type="text" name="fieldName" class="w-full border rounded px-3 py-2" value="name">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Email Field</label>
+                                                <input type="text" name="fieldEmail" class="w-full border rounded px-3 py-2" value="email">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Mobile Field</label>
+                                                <input type="text" name="fieldMobile" class="w-full border rounded px-3 py-2" value="mobile">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Inquiry Field</label>
+                                                <input type="text" name="fieldInquiry" class="w-full border rounded px-3 py-2" value="inquiry">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Source URL Field</label>
+                                                <input type="text" name="fieldSourceUrl" class="w-full border rounded px-3 py-2" value="source_url">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Created Date Field</label>
+                                                <input type="text" name="fieldCreatedOn" class="w-full border rounded px-3 py-2" value="created_on">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Type Field</label>
+                                                <input type="text" name="fieldType" class="w-full border rounded px-3 py-2" value="Type">
+                                            </div>
+                                            <div>
+                                                <label class="block text-sm font-medium mb-1">Additional Details Field</label>
+                                                <input type="text" name="fieldAdditionalDetails" class="w-full border rounded px-3 py-2" value="additional_details">
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="border-t pt-4">
+                                        <h4 class="font-medium mb-2">Test API Configuration</h4>
+                                        <div class="flex items-center space-x-2">
+                                            <button type="button" id="test-api-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm">
+                                                Test API
+                                            </button>
+                                            <button type="button" id="view-data-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                                                View Sample Data
+                                            </button>
+                                        </div>
+                                        <div id="api-test-result" class="mt-2 p-3 bg-gray-50 rounded hidden">
+                                            <pre class="text-xs overflow-auto max-h-32"></pre>
+                                        </div>
+                                    </div>
+                                </form>
+                            </div>
+
+                            <div class="flex justify-end gap-2 pt-4 border-t">
+                                <button type="button" id="cancel-leads-auto-chat-btn" class="px-4 py-2 rounded border">Cancel</button>
+                                <button type="submit" form="leads-auto-chat-form" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Save Configuration</button>
+                            </div>
                         </div>
                     </div>
                 </div>
