@@ -580,8 +580,8 @@
                         <!-- Modals and forms will be injected here by JS -->
                     </div>
                     <!-- Add/Edit Automation Modal -->
-                    <div id="automation-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
-                        <div class="bg-white rounded-lg shadow-lg w-full max-w-lg p-6 relative">
+                    <div id="automation-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden p-4">
+                        <div class="bg-white rounded-lg shadow-lg w-full max-w-4xl max-h-[90vh] overflow-y-auto p-6 relative">
                             <button id="close-automation-modal" class="absolute top-2 right-2 text-gray-400 hover:text-gray-700 text-2xl">&times;</button>
                             <h3 id="automation-modal-title" class="text-lg font-semibold mb-4">Add Automation</h3>
                             <form id="automation-form" class="space-y-4">
@@ -608,13 +608,13 @@
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium mb-1">System Prompt</label>
-                                    <textarea id="automation-system-prompt" class="w-full border rounded px-3 py-2" rows="4" required maxlength="10000" placeholder="e.g. You are a helpful assistant..."></textarea>
-                                    <div class="text-xs text-gray-500 mt-1">Maximum 10,000 characters allowed</div>
+                                    <textarea id="automation-system-prompt" class="w-full border rounded px-3 py-2 resize-y" rows="6" required maxlength="10000" placeholder="e.g. You are a helpful assistant..."></textarea>
+                                    <div class="text-xs text-gray-500 mt-1">Maximum 10,000 characters allowed. You can resize the textarea vertically.</div>
                                 </div>
                                 <div id="automation-auto-reply-section">
                                     <label class="block text-sm font-medium mb-1">Auto Reply Prompt</label>
-                                    <textarea id="automation-auto-reply-prompt" class="w-full border rounded px-3 py-2" rows="4" maxlength="10000" placeholder="e.g. Reply to the user with..."></textarea>
-                                    <div class="text-xs text-gray-500 mt-1">Required for chat automations. Not available for channels. Maximum 10,000 characters allowed</div>
+                                    <textarea id="automation-auto-reply-prompt" class="w-full border rounded px-3 py-2 resize-y" rows="6" maxlength="10000" placeholder="e.g. Reply to the user with..."></textarea>
+                                    <div class="text-xs text-gray-500 mt-1">Required for chat automations. Not available for channels. Maximum 10,000 characters allowed. You can resize the textarea vertically.</div>
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium mb-1">Schedule (Days, Times) <span class='text-xs text-gray-500' id="schedule-optional">(optional)</span><span class='text-xs text-red-500 hidden' id="schedule-required">(required for channels)</span></label>

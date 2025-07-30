@@ -50,6 +50,37 @@
         return div.innerHTML;
     }
 
+    // Toggle functions for expandable content
+    window.toggleSystemPrompt = function(index) {
+        const content = document.querySelector(`.system-prompt-content-${index}`);
+        const button = document.querySelector(`.show-more-system-${index}`);
+        
+        if (content.classList.contains('max-h-16')) {
+            content.classList.remove('max-h-16', 'overflow-hidden');
+            content.classList.add('max-h-96', 'overflow-y-auto');
+            button.textContent = 'Show less';
+        } else {
+            content.classList.remove('max-h-96', 'overflow-y-auto');
+            content.classList.add('max-h-16', 'overflow-hidden');
+            button.textContent = 'Show more';
+        }
+    };
+
+    window.toggleAutoReplyPrompt = function(index) {
+        const content = document.querySelector(`.auto-reply-content-${index}`);
+        const button = document.querySelector(`.show-more-auto-reply-${index}`);
+        
+        if (content.classList.contains('max-h-16')) {
+            content.classList.remove('max-h-16', 'overflow-hidden');
+            content.classList.add('max-h-96', 'overflow-y-auto');
+            button.textContent = 'Show less';
+        } else {
+            content.classList.remove('max-h-96', 'overflow-y-auto');
+            content.classList.add('max-h-16', 'overflow-hidden');
+            button.textContent = 'Show more';
+        }
+    };
+
     // Initialize Automate Tab
     function initAutomateTab() {
         if (!automateTabBtn) return;
@@ -414,38 +445,89 @@
         }
         
         if (automateListContainer) {
-            automateListContainer.innerHTML = automations.map(a => {
+            automateListContainer.innerHTML = automations.map((a, index) => {
                 const isChannel = a.chatId && (a.chatId.endsWith('@newsletter') || a.chatId.endsWith('@broadcast'));
                 const automationType = isChannel ? 'Channel' : 'Chat';
                 const typeColor = isChannel ? 'text-purple-700' : 'text-green-700';
                 const typeBg = isChannel ? 'bg-purple-100' : 'bg-green-100';
                 
                 return `
-                    <div class="border rounded p-4 mb-2 w-full" data-automation-id="${a.id}">
-                        <div class="flex flex-col md:flex-row md:items-center justify-between automation-info">
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <div class="font-semibold ${typeColor}">${escapeHtml(a.chatName)}</div>
-                                    <span class="px-2 py-1 rounded text-xs font-semibold ${typeBg} ${typeColor}">${automationType}</span>
+                    <div class="border rounded-lg p-4 mb-4 w-full bg-white shadow-sm hover:shadow-md transition-shadow" data-automation-id="${a.id}">
+                        <div class="flex flex-col lg:flex-row lg:items-start justify-between gap-4">
+                            <div class="flex-1 min-w-0">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <div class="font-semibold ${typeColor} truncate">${escapeHtml(a.chatName)}</div>
+                                    <span class="px-2 py-1 rounded text-xs font-semibold ${typeBg} ${typeColor} flex-shrink-0">${automationType}</span>
                                 </div>
-                                <div class="text-xs text-gray-500">ID: ${escapeHtml(a.chatId)}</div>
-                                <div class="text-xs text-gray-500">Status: <span class="font-semibold">${escapeHtml(a.status || 'active')}</span></div>
-                                <div class="text-xs text-gray-500">System Prompt: <span class="font-mono">${escapeHtml(a.systemPrompt).slice(0, 60)}${a.systemPrompt.length > 60 ? '...' : ''}</span></div>
-                                <div class="text-xs text-gray-500">Auto Reply: <span class="font-mono">${isChannel ? 'Not Available' : (escapeHtml(a.autoReplyPrompt || 'None').slice(0, 60) + (a.autoReplyPrompt && a.autoReplyPrompt.length > 60 ? '...' : ''))}</span></div>
-                                <div class="text-xs text-gray-400">Schedule: ${escapeHtml(JSON.stringify(a.schedule))}</div>
+                                
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                                    <div class="space-y-2">
+                                        <div class="text-xs text-gray-500">
+                                            <span class="font-medium">ID:</span> 
+                                            <span class="font-mono break-all">${escapeHtml(a.chatId)}</span>
+                                        </div>
+                                        <div class="text-xs text-gray-500">
+                                            <span class="font-medium">Status:</span> 
+                                            <span class="font-semibold ${a.status === 'active' ? 'text-green-600' : 'text-yellow-600'}">${escapeHtml(a.status || 'active')}</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="space-y-2">
+                                        <div class="text-xs text-gray-500">
+                                            <span class="font-medium">Schedule:</span>
+                                            <div class="font-mono text-xs bg-gray-50 p-2 rounded mt-1 break-all max-h-20 overflow-y-auto">
+                                                ${escapeHtml(JSON.stringify(a.schedule, null, 2))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="mt-3 space-y-2">
+                                    <div class="text-xs text-gray-500">
+                                        <span class="font-medium">System Prompt:</span>
+                                        <div class="mt-1">
+                                            <div class="system-prompt-content-${index} text-xs bg-gray-50 p-2 rounded max-h-16 overflow-hidden">
+                                                <span class="font-mono">${escapeHtml(a.systemPrompt)}</span>
+                                            </div>
+                                            ${a.systemPrompt.length > 200 ? `
+                                                <button class="text-blue-600 hover:text-blue-800 text-xs mt-1 show-more-system-${index}" onclick="toggleSystemPrompt(${index})">
+                                                    Show more
+                                                </button>
+                                            ` : ''}
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="text-xs text-gray-500">
+                                        <span class="font-medium">Auto Reply:</span>
+                                        <div class="mt-1">
+                                            ${isChannel ? 
+                                                '<span class="text-gray-400 italic">Not Available</span>' : 
+                                                `<div class="auto-reply-content-${index} text-xs bg-gray-50 p-2 rounded max-h-16 overflow-hidden">
+                                                    <span class="font-mono">${escapeHtml(a.autoReplyPrompt || 'None')}</span>
+                                                </div>
+                                                ${a.autoReplyPrompt && a.autoReplyPrompt.length > 200 ? `
+                                                    <button class="text-blue-600 hover:text-blue-800 text-xs mt-1 show-more-auto-reply-${index}" onclick="toggleAutoReplyPrompt(${index})">
+                                                        Show more
+                                                    </button>
+                                                ` : ''}`
+                                            }
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="flex gap-2 mt-2 md:mt-0">
-                                <button class="automation-edit-btn bg-blue-600 text-white px-3 py-1 rounded text-xs" data-id="${a.id}">Edit</button>
-                                <button class="automation-delete-btn bg-red-600 text-white px-3 py-1 rounded text-xs" data-id="${a.id}">Delete</button>
-                                <button class="automation-pause-btn bg-yellow-500 text-white px-3 py-1 rounded text-xs" data-id="${a.id}">${a.status === 'paused' ? 'Resume' : 'Pause'}</button>
-                                <button class="automation-log-btn bg-gray-600 text-white px-3 py-1 rounded text-xs" data-id="${a.id}">Logs</button>
+                            
+                            <div class="flex flex-wrap gap-2 lg:flex-col lg:flex-shrink-0">
+                                <button class="automation-edit-btn bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 transition-colors" data-id="${a.id}">Edit</button>
+                                <button class="automation-delete-btn bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700 transition-colors" data-id="${a.id}">Delete</button>
+                                <button class="automation-pause-btn ${a.status === 'paused' ? 'bg-green-600 hover:bg-green-700' : 'bg-yellow-500 hover:bg-yellow-600'} text-white px-3 py-1 rounded text-xs transition-colors" data-id="${a.id}">${a.status === 'paused' ? 'Resume' : 'Pause'}</button>
+                                <button class="automation-log-btn bg-gray-600 text-white px-3 py-1 rounded text-xs hover:bg-gray-700 transition-colors" data-id="${a.id}">Logs</button>
                             </div>
                         </div>
                     </div>
                 `;
             }).join('');
             
-            // Attach event listeners - functions are now defined above
+            // Attach event listeners
             document.querySelectorAll('.automation-edit-btn').forEach(btn => {
                 btn.addEventListener('click', () => openEditAutomationModal(btn.dataset.id));
             });
