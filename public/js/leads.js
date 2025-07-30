@@ -1578,11 +1578,15 @@
             console.log('Add contact result:', result);
             
             if (result.success) {
-                console.log('Contact added/updated successfully:', result.contact);
+                console.log('Contact status:', result.message);
                 return true;
             } else {
-                console.error('Failed to add contact:', result.error);
-                return false;
+                console.log('Contact operation result:', result.message);
+                if (result.guidance) {
+                    console.log('Guidance:', result.guidance);
+                }
+                // Return true if contact exists (even if it needs manual update)
+                return result.message.includes('already exists') || result.message.includes('Contact exists');
             }
         } catch (err) {
             console.error('Error adding contact:', err);
@@ -1623,10 +1627,10 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            Adding Contacts...
+            Checking Contacts...
         `;
         
-        showLeadsStatus(`Adding ${leadsToAdd.length} leads to contacts...`, 'info');
+        showLeadsStatus(`Checking contact status for ${leadsToAdd.length} leads...`, 'info');
         
         let successCount = 0;
         let failCount = 0;
@@ -1671,9 +1675,9 @@
             clearTimeout(timeout);
             
             if (successCount > 0) {
-                showLeadsStatus(`Successfully added ${successCount} contacts${failCount > 0 ? `, ${failCount} failed` : ''}`, 'success');
+                showLeadsStatus(`Contact status checked for ${successCount} leads${failCount > 0 ? `, ${failCount} need manual action` : ''}`, 'success');
             } else {
-                showLeadsStatus(`Failed to add any contacts. ${failCount} errors.`, 'error');
+                showLeadsStatus(`No contacts were found. Please add contacts manually through WhatsApp.`, 'warning');
             }
             
             // Refresh the list to update contact status icons
@@ -2026,4 +2030,35 @@
 
     // Initialize when DOM is loaded
     document.addEventListener('DOMContentLoaded', initLeadsTab);
+
+    // Toggle functions for expandable content
+    window.toggleSystemPrompt = function(index) {
+        const content = document.querySelector(`.system-prompt-content-${index}`);
+        const button = document.querySelector(`.show-more-system-${index}`);
+        
+        if (content.classList.contains('max-h-16')) {
+            content.classList.remove('max-h-16', 'overflow-hidden');
+            content.classList.add('max-h-96', 'overflow-y-auto');
+            button.textContent = 'Show less';
+        } else {
+            content.classList.remove('max-h-96', 'overflow-y-auto');
+            content.classList.add('max-h-16', 'overflow-hidden');
+            button.textContent = 'Show more';
+        }
+    };
+
+    window.toggleAutoReplyPrompt = function(index) {
+        const content = document.querySelector(`.auto-reply-content-${index}`);
+        const button = document.querySelector(`.show-more-auto-reply-${index}`);
+        
+        if (content.classList.contains('max-h-16')) {
+            content.classList.remove('max-h-16', 'overflow-hidden');
+            content.classList.add('max-h-96', 'overflow-y-auto');
+            button.textContent = 'Show less';
+        } else {
+            content.classList.remove('max-h-96', 'overflow-y-auto');
+            content.classList.add('max-h-16', 'overflow-hidden');
+            button.textContent = 'Show more';
+        }
+    };
 })(); 

@@ -2697,18 +2697,23 @@ app.post('/api/contacts/add', async (req, res) => {
             }
         }
         
-        // Add contact to WhatsApp with proper details
-        const contactData = {
-            id: chatId,
-            name: name || `Contact ${normalizedNumber}`,
-            number: normalizedNumber
-        };
+        // Note: WhatsApp Web.js doesn't provide a direct method to add contacts programmatically
+        // Contacts must be added manually through the WhatsApp interface
+        // We can only check if the contact exists and provide guidance
+        console.log('Contact operation requested:', { chatId, name, normalizedNumber });
         
-        console.log('Adding contact with data:', contactData);
+        // Get the contact using the chat ID
+        const contact = await client.getContactById(chatId);
         
-        const contact = await client.addContact(contactData);
+        if (!contact) {
+            return res.json({ 
+                success: false, 
+                message: 'Contact not found. Please add the contact manually through WhatsApp.',
+                guidance: 'To add this contact: 1. Open WhatsApp 2. Go to Contacts 3. Tap + 4. Enter the number and name'
+            });
+        }
         
-        console.log('Contact added successfully:', {
+        console.log('Contact status:', {
             id: contact.id,
             name: contact.name,
             number: contact.number,
@@ -2716,17 +2721,32 @@ app.post('/api/contacts/add', async (req, res) => {
             isWAContact: contact.isWAContact
         });
         
-        res.json({ 
-            success: true, 
-            message: needsUpdate ? 'Contact updated with name' : 'Contact added successfully',
-            contact: {
-                id: contact.id,
-                name: contact.name,
-                number: contact.number,
-                isMyContact: contact.isMyContact,
-                isWAContact: contact.isWAContact
-            }
-        });
+        if (needsUpdate) {
+            res.json({ 
+                success: false, 
+                message: 'Contact exists but needs name update. Please update manually in WhatsApp.',
+                guidance: 'To update contact name: 1. Open WhatsApp 2. Find this contact 3. Tap Edit 4. Update the name',
+                contact: {
+                    id: contact.id,
+                    name: contact.name,
+                    number: contact.number,
+                    isMyContact: contact.isMyContact,
+                    isWAContact: contact.isWAContact
+                }
+            });
+        } else {
+            res.json({ 
+                success: true, 
+                message: 'Contact already exists with proper name',
+                contact: {
+                    id: contact.id,
+                    name: contact.name,
+                    number: contact.number,
+                    isMyContact: contact.isMyContact,
+                    isWAContact: contact.isWAContact
+                }
+            });
+        }
     } catch (err) {
         console.error('Error adding contact:', err);
         res.status(500).json({ 
