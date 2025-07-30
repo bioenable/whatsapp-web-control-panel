@@ -1584,9 +1584,11 @@
                 console.log('Contact operation result:', result.message);
                 if (result.guidance) {
                     console.log('Guidance:', result.guidance);
+                    // Show guidance to user
+                    showLeadsStatus(result.message + ' - ' + result.guidance, 'warning');
                 }
                 // Return true if contact exists (even if it needs manual update)
-                return result.message.includes('already exists') || result.message.includes('Contact exists');
+                return result.message.includes('already exists') || result.message.includes('Contact exists') || result.message.includes('Contact exists but needs name update');
             }
         } catch (err) {
             console.error('Error adding contact:', err);

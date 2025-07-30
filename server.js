@@ -2560,7 +2560,16 @@ app.post('/api/contacts/check', async (req, res) => {
                 const hasProperName = contact.name && 
                                     contact.name !== normalizedNumber && 
                                     contact.name !== `Contact ${normalizedNumber}` &&
+                                    contact.name !== 'undefined' &&
+                                    contact.name !== undefined &&
                                     contact.name.length > 0;
+                
+                console.log('Contact name check:', {
+                    name: contact.name,
+                    normalizedNumber: normalizedNumber,
+                    hasProperName: hasProperName,
+                    nameLength: contact.name ? contact.name.length : 0
+                });
                 
                 // Contact exists if it's either in our contacts or is a WhatsApp user
                 const exists = contact.isMyContact || contact.isWAContact;
@@ -2643,7 +2652,7 @@ app.post('/api/contacts/add', async (req, res) => {
                 });
                 
                 // Check if contact needs name update
-                if (name && (!existingContact.name || existingContact.name === `Contact ${normalizedNumber}` || existingContact.name === normalizedNumber)) {
+                if (name && (!existingContact.name || existingContact.name === `Contact ${normalizedNumber}` || existingContact.name === normalizedNumber || existingContact.name === 'undefined' || existingContact.name === undefined)) {
                     console.log('Contact exists but needs name update:', existingContact.name, '->', name);
                     needsUpdate = true;
                 } else if (name && existingContact.name === name) {
