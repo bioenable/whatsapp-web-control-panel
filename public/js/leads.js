@@ -4,6 +4,8 @@
 (function() {
     'use strict';
     
+    console.log('Leads.js: Module loaded successfully');
+    
     // DOM Elements for Leads Tab
     const leadsList = document.getElementById('leads-list');
     const leadsContainer = document.getElementById('leads-container');
@@ -1429,26 +1431,38 @@
 
     // Start auto fetch every 5 minutes
     async function startAutoFetch() {
+        console.log('startAutoFetch: Starting auto-fetch initialization...');
+        
         if (fetchInterval) {
             clearInterval(fetchInterval);
+            console.log('startAutoFetch: Cleared existing interval');
         }
         
         try {
             // Load configuration to get refresh frequency
+            console.log('startAutoFetch: Loading configuration...');
             const configResponse = await fetch('/api/leads-config');
             const config = await configResponse.json();
             
             const refreshFrequency = config.apiConfig?.refreshFrequency || 5 * 60 * 1000; // Default 5 minutes
             
-            console.log(`Starting auto-fetch with frequency: ${refreshFrequency}ms (${refreshFrequency / 60000} minutes)`);
+            console.log(`startAutoFetch: Starting auto-fetch with frequency: ${refreshFrequency}ms (${refreshFrequency / 60000} minutes)`);
+            
+            // Start immediate fetch
+            console.log('startAutoFetch: Triggering immediate fetch...');
+            silentFetchLeadsFromAPI();
             
             fetchInterval = setInterval(() => {
                 // Silent fetch for auto updates (no alerts for errors)
+                console.log('startAutoFetch: Triggering scheduled fetch...');
                 silentFetchLeadsFromAPI();
             }, refreshFrequency);
+            
+            console.log('startAutoFetch: Auto-fetch initialized successfully');
         } catch (err) {
-            console.error('Error loading auto-fetch configuration:', err);
+            console.error('startAutoFetch: Error loading auto-fetch configuration:', err);
             // Fallback to 5 minutes if config fails
+            console.log('startAutoFetch: Using fallback 5-minute interval');
             fetchInterval = setInterval(() => {
                 silentFetchLeadsFromAPI();
             }, 5 * 60 * 1000);
@@ -1457,7 +1471,7 @@
 
     // Silent fetch for auto updates (no error alerts)
     function silentFetchLeadsFromAPI() {
-        console.log('Auto-fetch: Starting silent fetch from API...');
+        console.log('silentFetchLeadsFromAPI: Starting silent fetch from API...');
         
         fetch('/api/proxy/leads', {
             method: 'POST',
@@ -1466,21 +1480,23 @@
             }
         })
         .then(res => {
+            console.log(`silentFetchLeadsFromAPI: Response status: ${res.status}`);
             if (!res.ok) {
                 throw new Error(`HTTP error! status: ${res.status}`);
             }
             return res.json();
         })
         .then(data => {
+            console.log(`silentFetchLeadsFromAPI: API response - success: ${data.success}, data length: ${data.data ? data.data.length : 0}`);
             if (data.success && data.data) {
-                console.log(`Auto-fetch: Successfully fetched ${data.data.length} leads from API`);
+                console.log(`silentFetchLeadsFromAPI: Successfully fetched ${data.data.length} leads from API`);
                 processNewLeadsSilent(data.data);
             } else {
-                console.error('Auto-fetch: API returned error:', data);
+                console.error('silentFetchLeadsFromAPI: API returned error:', data);
             }
         })
         .catch(err => {
-            console.error('Auto-fetch: Failed to fetch leads from API:', err);
+            console.error('silentFetchLeadsFromAPI: Failed to fetch leads from API:', err);
         });
     }
 
