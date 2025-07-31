@@ -660,12 +660,69 @@ setInterval(async () => {
         if (isNaN(sendTime.getTime()) || sendTime > now) continue;
         // Double-check status before sending
         if (r.status === 'sent') continue;
-        // Send message with retry mechanism
+        // Send message with contact management
         try {
             const normalizedNumber = r.number.trim();
-            const chatId = !normalizedNumber.endsWith('@c.us') && !normalizedNumber.endsWith('@g.us')
+            let chatId = !normalizedNumber.endsWith('@c.us') && !normalizedNumber.endsWith('@g.us')
                 ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
                 : normalizedNumber;
+            
+            // Check if contact exists and add if needed
+            let contactExists = false;
+            try {
+                const contact = await client.getContactById(chatId);
+                if (contact && contact.isMyContact) {
+                    console.log(`[BULK] Contact exists for ${normalizedNumber}: ${contact.name}`);
+                    contactExists = true;
+                } else {
+                    console.log(`[BULK] Contact does not exist for ${normalizedNumber}, adding...`);
+                }
+            } catch (err) {
+                console.log(`[BULK] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
+            }
+            
+            // Add contact if it doesn't exist
+            if (!contactExists) {
+                try {
+                    // Generate name if not available
+                    let firstName = '';
+                    let lastName = '';
+                    
+                    if (r.name && r.name.trim()) {
+                        const nameParts = r.name.trim().split(' ').filter(part => part.length > 0);
+                        if (nameParts.length === 1) {
+                            firstName = nameParts[0];
+                            lastName = '';
+                        } else if (nameParts.length >= 2) {
+                            firstName = nameParts[0];
+                            lastName = nameParts.slice(1).join(' ');
+                        }
+                    } else {
+                        // Generate random 6-character alphanumeric string as firstName
+                        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                        firstName = Array.from({length: 6}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+                        lastName = 'bulk';
+                        console.log(`[BULK] Generated random name for ${normalizedNumber}: ${firstName} ${lastName}`);
+                    }
+                    
+                    // Add contact using saveOrEditAddressbookContact
+                    const contactChatId = await client.saveOrEditAddressbookContact(
+                        normalizedNumber.replace(/[^0-9]/g, ''),
+                        firstName,
+                        lastName,
+                        true // syncToAddressbook = true
+                    );
+                    
+                    console.log(`[BULK] Contact added successfully for ${normalizedNumber}: ${firstName} ${lastName}`);
+                    
+                    // Use the returned chatId for sending message
+                    chatId = contactChatId._serialized || contactChatId;
+                    
+                } catch (addErr) {
+                    console.error(`[BULK] Failed to add contact for ${normalizedNumber}:`, addErr.message);
+                    // Continue with original chatId if contact addition fails
+                }
+            }
             
             // Use retry mechanism for sending messages
             await retryOperation(async () => {

@@ -871,7 +871,7 @@ const bulkRetryBtn = document.getElementById('bulk-retry-btn');
     
     function createBulkCsvContent(numbers, message, startDatetime, delayConfig, mediaUrl = '', addUniqueCode = false) {
         const startTime = new Date(startDatetime);
-        let csv = 'number,message,media,send_datetime\n';
+        let csv = 'number,name,message,media,send_datetime\n';
         
         numbers.forEach((number, index) => {
             let currentMessage = message;
@@ -915,7 +915,17 @@ const bulkRetryBtn = document.getElementById('bulk-retry-btn');
             
             const formattedTime = messageTime.toLocaleString('sv-SE', { timeZone: bulkTimezone }).replace(' ', 'T');
             
-            csv += `"${number}","${currentMessage.replace(/"/g, '""')}","${mediaUrl}",${formattedTime}\n`;
+            // Extract name from number if it contains a name (format: "Name: +1234567890")
+            let name = '';
+            if (number.includes(':')) {
+                const parts = number.split(':');
+                if (parts.length >= 2) {
+                    name = parts[0].trim();
+                    number = parts[1].trim();
+                }
+            }
+            
+            csv += `"${number}","${name}","${currentMessage.replace(/"/g, '""')}","${mediaUrl}",${formattedTime}\n`;
         });
         
         return csv;
