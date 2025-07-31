@@ -188,6 +188,10 @@
                         if (lead.contact_added === undefined) {
                             lead.contact_added = false;
                         }
+                        // Convert old boolean false to string 'error' if it was previously failed
+                        if (lead.contact_added === false && lead.contact_added_attempted) {
+                            lead.contact_added = 'error';
+                        }
                     });
                     
                     leadsFilteredData = [...leadsData];
@@ -445,10 +449,30 @@
                         if (lead.contact_added === undefined) {
                             lead.contact_added = false;
                         }
+                        // Convert old boolean false to string 'error' if it was previously attempted
+                        if (lead.contact_added === false && lead.contact_added_attempted) {
+                            lead.contact_added = 'error';
+                        }
                         
-                        const contactIconColor = lead.contact_added ? 'text-green-600' : 'text-red-600';
-                        const contactTitle = lead.contact_added ? 'Contact exists in WhatsApp' : 'Click to retry adding contact';
-                        const contactOnClick = lead.contact_added ? 'javascript:void(0)' : `retryContactAddition('${lead.mobile}', '${escapeHtml(lead.name)}')`;
+                        // Determine icon color and behavior based on contact status
+                        let contactIconColor, contactTitle, contactOnClick;
+                        
+                        if (lead.contact_added === true) {
+                            // Success - green icon, no click action
+                            contactIconColor = 'text-green-600';
+                            contactTitle = 'Contact exists in WhatsApp';
+                            contactOnClick = 'javascript:void(0)';
+                        } else if (lead.contact_added === 'error') {
+                            // Error - red icon, clickable for retry
+                            contactIconColor = 'text-red-600';
+                            contactTitle = 'Contact addition failed - Click to retry';
+                            contactOnClick = `retryContactAddition('${lead.mobile}', '${escapeHtml(lead.name)}')`;
+                        } else {
+                            // Not processed yet - gray icon, no click action (will be processed automatically)
+                            contactIconColor = 'text-gray-400';
+                            contactTitle = 'Contact will be processed automatically';
+                            contactOnClick = 'javascript:void(0)';
+                        }
                         return `
                             <tr class="border-b hover:bg-gray-50">
                                 <td class="px-3 py-2">
@@ -535,7 +559,7 @@
                                             <strong>Mobile:</strong> ${escapeHtml(lead.mobile)}<br>
                                             <strong>Type:</strong> ${escapeHtml(lead.Type)}<br>
                                             <strong>Created:</strong> ${formatDateTime(lead.created_on)}<br>
-                                            <strong>Contact Added:</strong> ${lead.contact_added ? 'Yes' : 'No'}<br>
+                                            <strong>Contact Added:</strong> ${lead.contact_added === true ? 'Yes' : lead.contact_added === 'error' ? 'Error - Click icon to retry' : 'No'}<br>
                                             <strong>Auto Chat:</strong> ${lead.auto_chat_enabled ? 'Enabled' : 'Disabled'}<br>
                                             <strong>Auto Chat Messages:</strong> ${lead.auto_chat_logs ? lead.auto_chat_logs.length : 0}
                                         </div>
@@ -2036,11 +2060,14 @@
         console.log('[CONTACTS] Starting background contact processing...');
         
         try {
-            // Only process leads that don't have contact_added set to true
-            const leadsNeedingContacts = leadsData.filter(lead => lead.contact_added !== true);
+            // Only process leads that don't have contact_added set to true and are not in error state
+            const leadsNeedingContacts = leadsData.filter(lead => 
+                lead.contact_added !== true && 
+                lead.contact_added !== 'error'
+            );
             
             if (leadsNeedingContacts.length === 0) {
-                console.log('[CONTACTS] All leads already have contacts added (contact_added: true)');
+                console.log('[CONTACTS] All leads already have contacts added (contact_added: true) or are in error state');
                 return;
             }
             
@@ -2048,6 +2075,7 @@
             
             let successCount = 0;
             let failCount = 0;
+            let errorCount = 0;
             
             for (const lead of leadsNeedingContacts) {
                 try {
@@ -2059,26 +2087,26 @@
                         lead.contact_added = true;
                         successCount++;
                     } else {
-                        // Ensure contact_added is set to false for failed attempts
-                        lead.contact_added = false;
-                        failCount++;
-                        console.log(`[CONTACTS] Failed to add contact for ${lead.mobile}`);
+                        // Set contact_added to 'error' for failed attempts
+                        lead.contact_added = 'error';
+                        errorCount++;
+                        console.log(`[CONTACTS] Failed to add contact for ${lead.mobile} - marked as error`);
                     }
                     
                     // Small delay to avoid overwhelming the server
                     await new Promise(resolve => setTimeout(resolve, 500));
                 } catch (err) {
                     console.error(`[CONTACTS] Error processing contact for ${lead.mobile}:`, err);
-                    // Ensure contact_added is set to false for errors
-                    lead.contact_added = false;
-                    failCount++;
+                    // Set contact_added to 'error' for exceptions
+                    lead.contact_added = 'error';
+                    errorCount++;
                 }
             }
             
             // Save updated leads data if any contacts were processed
-            if (successCount > 0 || failCount > 0) {
+            if (successCount > 0 || errorCount > 0) {
                 saveLeadsData(leadsData);
-                console.log(`[CONTACTS] Successfully processed ${successCount} contacts, ${failCount} failed`);
+                console.log(`[CONTACTS] Successfully processed ${successCount} contacts, ${errorCount} marked as error`);
             }
             
         } catch (err) {
@@ -2108,20 +2136,20 @@
                     showLeadsStatus(`Contact added successfully for ${name}`, 'success');
                 }
             } else {
-                // Ensure contact_added is set to false for failed attempts
+                // Set contact_added to 'error' for failed attempts
                 const lead = leadsData.find(l => l.mobile === mobile);
                 if (lead) {
-                    lead.contact_added = false;
+                    lead.contact_added = 'error';
                     saveLeadsData(leadsData);
                 }
                 showLeadsStatus(`Failed to add contact for ${name}. Please try again.`, 'error');
             }
         } catch (err) {
             console.error(`[CONTACTS] Error retrying contact addition for ${mobile}:`, err);
-            // Ensure contact_added is set to false for errors
+            // Set contact_added to 'error' for exceptions
             const lead = leadsData.find(l => l.mobile === mobile);
             if (lead) {
-                lead.contact_added = false;
+                lead.contact_added = 'error';
                 saveLeadsData(leadsData);
             }
             showLeadsStatus(`Error adding contact for ${name}: ${err.message}`, 'error');
