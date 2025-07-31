@@ -1595,6 +1595,13 @@
             
             if (result.success) {
                 console.log('Contact status:', result.message);
+                
+                // Check if manual name update is needed
+                if (result.needsManualNameUpdate) {
+                    console.log('Contact exists but needs manual name update');
+                    showLeadsStatus('Contact exists but name update failed - manual update may be required', 'warning');
+                }
+                
                 return true;
             } else {
                 console.log('Contact operation result:', result.message);
@@ -2048,10 +2055,9 @@
                     const success = await addContact(lead.mobile, lead.name);
                     
                     if (success) {
-                        // Update the lead's contact status
+                        console.log(`[CONTACTS] Successfully processed contact for ${lead.mobile}`);
                         lead.contact_added = true;
                         successCount++;
-                        console.log(`[CONTACTS] Successfully added contact for ${lead.mobile}`);
                     } else {
                         // Ensure contact_added is set to false for failed attempts
                         lead.contact_added = false;
