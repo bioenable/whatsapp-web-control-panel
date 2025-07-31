@@ -1582,13 +1582,16 @@
                 return true;
             } else {
                 console.log('Contact operation result:', result.message);
-                if (result.guidance) {
+                if (result.error) {
+                    console.error('Contact operation error:', result.error);
+                    showLeadsStatus('Error: ' + result.error, 'error');
+                } else if (result.guidance) {
                     console.log('Guidance:', result.guidance);
                     // Show guidance to user
                     showLeadsStatus(result.message + ' - ' + result.guidance, 'warning');
                 }
                 // Return true if contact exists (even if it needs manual update)
-                return result.message.includes('already exists') || result.message.includes('Contact exists') || result.message.includes('Contact exists but needs name update');
+                return result.message.includes('already exists') || result.message.includes('Contact exists') || result.message.includes('Contact exists but needs name update') || result.message.includes('Contact updated successfully') || result.message.includes('Contact created successfully');
             }
         } catch (err) {
             console.error('Error adding contact:', err);
@@ -1629,10 +1632,10 @@
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            Checking Contacts...
+            Adding Contacts...
         `;
         
-        showLeadsStatus(`Checking contact status for ${leadsToAdd.length} leads...`, 'info');
+        showLeadsStatus(`Adding/updating contacts for ${leadsToAdd.length} leads...`, 'info');
         
         let successCount = 0;
         let failCount = 0;
@@ -1677,9 +1680,9 @@
             clearTimeout(timeout);
             
             if (successCount > 0) {
-                showLeadsStatus(`Contact status checked for ${successCount} leads${failCount > 0 ? `, ${failCount} need manual action` : ''}`, 'success');
+                showLeadsStatus(`Successfully added/updated ${successCount} contacts${failCount > 0 ? `, ${failCount} failed` : ''}`, 'success');
             } else {
-                showLeadsStatus(`No contacts were found. Please add contacts manually through WhatsApp.`, 'warning');
+                showLeadsStatus(`Failed to add/update any contacts. Please try again.`, 'error');
             }
             
             // Refresh the list to update contact status icons

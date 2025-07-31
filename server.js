@@ -2706,54 +2706,59 @@ app.post('/api/contacts/add', async (req, res) => {
             }
         }
         
-        // Note: WhatsApp Web.js doesn't provide a direct method to add contacts programmatically
-        // Contacts must be added manually through the WhatsApp interface
-        // We can only check if the contact exists and provide guidance
-        console.log('Contact operation requested:', { chatId, name, normalizedNumber });
+        // Use WhatsApp Web.js saveOrEditAddressbookContact method to create/update contact
+        console.log('Creating/updating contact using saveOrEditAddressbookContact:', { normalizedNumber, name });
         
-        // Get the contact using the chat ID
-        const contact = await client.getContactById(chatId);
-        
-        if (!contact) {
-            return res.json({ 
+        try {
+            // Split name into first and last name
+            const nameParts = name ? name.trim().split(' ') : ['', ''];
+            const firstName = nameParts[0] || '';
+            const lastName = nameParts.slice(1).join(' ') || '';
+            
+            console.log('Name parts:', { firstName, lastName });
+            
+            // Use the proper method to save/edit contact
+            const result = await client.saveOrEditAddressbookContact(
+                normalizedNumber, 
+                firstName, 
+                lastName, 
+                true // syncToAddressbook = true to sync with phone
+            );
+            
+            console.log('Contact save/edit result:', result);
+            
+            // Get the updated contact to verify
+            const updatedContact = await client.getContactById(chatId);
+            
+            if (updatedContact) {
+                console.log('Updated contact:', {
+                    id: updatedContact.id,
+                    name: updatedContact.name,
+                    number: updatedContact.number,
+                    isMyContact: updatedContact.isMyContact,
+                    isWAContact: updatedContact.isWAContact
+                });
+                
+                res.json({ 
+                    success: true, 
+                    message: needsUpdate ? 'Contact updated successfully' : 'Contact created successfully',
+                    contact: {
+                        id: updatedContact.id,
+                        name: updatedContact.name,
+                        number: updatedContact.number,
+                        isMyContact: updatedContact.isMyContact,
+                        isWAContact: updatedContact.isWAContact
+                    }
+                });
+            } else {
+                throw new Error('Contact not found after creation/update');
+            }
+        } catch (saveErr) {
+            console.error('Error saving/editing contact:', saveErr);
+            res.status(500).json({ 
                 success: false, 
-                message: 'Contact not found. Please add the contact manually through WhatsApp.',
-                guidance: 'To add this contact: 1. Open WhatsApp 2. Go to Contacts 3. Tap + 4. Enter the number and name'
-            });
-        }
-        
-        console.log('Contact status:', {
-            id: contact.id,
-            name: contact.name,
-            number: contact.number,
-            isMyContact: contact.isMyContact,
-            isWAContact: contact.isWAContact
-        });
-        
-        if (needsUpdate) {
-            res.json({ 
-                success: false, 
-                message: 'Contact exists but needs name update. Please update manually in WhatsApp.',
-                guidance: 'To update contact name: 1. Open WhatsApp 2. Find this contact 3. Tap Edit 4. Update the name',
-                contact: {
-                    id: contact.id,
-                    name: contact.name,
-                    number: contact.number,
-                    isMyContact: contact.isMyContact,
-                    isWAContact: contact.isWAContact
-                }
-            });
-        } else {
-            res.json({ 
-                success: true, 
-                message: 'Contact already exists with proper name',
-                contact: {
-                    id: contact.id,
-                    name: contact.name,
-                    number: contact.number,
-                    isMyContact: contact.isMyContact,
-                    isWAContact: contact.isWAContact
-                }
+                error: 'Failed to save/edit contact', 
+                details: saveErr.message 
             });
         }
     } catch (err) {
