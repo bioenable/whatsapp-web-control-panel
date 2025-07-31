@@ -36,13 +36,22 @@
     async function initLeadsTab() {
         if (!leadsList) return;
 
+        // Load initial data and start auto-fetch immediately
+        loadLeadsData();
+        await loadAutoChatConfig();
+        await startAutoFetch();
+        
+        // Fetch fresh data from API after loading local data
+        setTimeout(() => {
+            fetchLeadsFromAPI();
+        }, 1000);
+
         // Set up event listeners
         const leadsTabBtn = document.getElementById('leads-tab');
         if (leadsTabBtn) {
             leadsTabBtn.addEventListener('click', async () => {
+                // Only fetch fresh data when tab is clicked, don't restart auto-fetch
                 fetchLeadsFromAPI();
-                await loadAutoChatConfig();
-                startAutoFetch();
             });
         }
 
@@ -1419,19 +1428,37 @@
     }
 
     // Start auto fetch every 5 minutes
-    function startAutoFetch() {
+    async function startAutoFetch() {
         if (fetchInterval) {
             clearInterval(fetchInterval);
         }
         
-        fetchInterval = setInterval(() => {
-            // Silent fetch for auto updates (no alerts for errors)
-            silentFetchLeadsFromAPI();
-        }, 5 * 60 * 1000); // 5 minutes
+        try {
+            // Load configuration to get refresh frequency
+            const configResponse = await fetch('/api/leads-config');
+            const config = await configResponse.json();
+            
+            const refreshFrequency = config.apiConfig?.refreshFrequency || 5 * 60 * 1000; // Default 5 minutes
+            
+            console.log(`Starting auto-fetch with frequency: ${refreshFrequency}ms (${refreshFrequency / 60000} minutes)`);
+            
+            fetchInterval = setInterval(() => {
+                // Silent fetch for auto updates (no alerts for errors)
+                silentFetchLeadsFromAPI();
+            }, refreshFrequency);
+        } catch (err) {
+            console.error('Error loading auto-fetch configuration:', err);
+            // Fallback to 5 minutes if config fails
+            fetchInterval = setInterval(() => {
+                silentFetchLeadsFromAPI();
+            }, 5 * 60 * 1000);
+        }
     }
 
     // Silent fetch for auto updates (no error alerts)
     function silentFetchLeadsFromAPI() {
+        console.log('Auto-fetch: Starting silent fetch from API...');
+        
         fetch('/api/proxy/leads', {
             method: 'POST',
             headers: {
@@ -1446,8 +1473,8 @@
         })
         .then(data => {
             if (data.success && data.data) {
+                console.log(`Auto-fetch: Successfully fetched ${data.data.length} leads from API`);
                 processNewLeadsSilent(data.data);
-                console.log(`Auto-fetch: Found ${data.data.length} leads from API`);
             } else {
                 console.error('Auto-fetch: API returned error:', data);
             }
@@ -1519,16 +1546,20 @@
                 renderLeadsList();
                 updateLeadsCount();
                 
-                // Process auto chat for new leads if enabled (only for leads created in last 30 minutes)
-                if (autoChatConfig.enabled) {
-                    const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
-                    newLeads.forEach(lead => {
-                        const leadDate = new Date(lead.created_on);
-                        if (leadDate > thirtyMinutesAgo && (!lead.auto_chat_logs || lead.auto_chat_logs.length === 0)) {
-                            processAutoChat(lead);
-                        }
-                    });
-                }
+                console.log(`Auto-fetch: Successfully processed and saved ${newLeads.length} new leads`);
+            } else {
+                console.log('Auto-fetch: No new leads found');
+            }
+                
+            // Process auto chat for new leads if enabled (only for leads created in last 30 minutes)
+            if (autoChatConfig.enabled) {
+                const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
+                newLeads.forEach(lead => {
+                    const leadDate = new Date(lead.created_on);
+                    if (leadDate > thirtyMinutesAgo && (!lead.auto_chat_logs || lead.auto_chat_logs.length === 0)) {
+                        processAutoChat(lead);
+                    }
+                });
             }
         } catch (err) {
             console.error('Auto-fetch: Error processing leads:', err);
