@@ -2710,18 +2710,35 @@ app.post('/api/contacts/add', async (req, res) => {
         try {
             console.log('Attempting to add/update contact using saveOrEditAddressbookContact...');
             
-            // Parse name into firstName and lastName
-            let firstName = name || '';
+            // Parse name into firstName and lastName with improved handling
+            let firstName = '';
             let lastName = '';
             
-            if (name && name.trim()) {
-                const nameParts = name.trim().split(' ');
-                if (nameParts.length === 1) {
+            if (name && typeof name === 'string' && name.trim()) {
+                const trimmedName = name.trim();
+                const nameParts = trimmedName.split(' ').filter(part => part.length > 0);
+                
+                if (nameParts.length === 0) {
+                    // Empty or whitespace-only name
+                    firstName = '';
+                    lastName = '';
+                } else if (nameParts.length === 1) {
+                    // Single word name
                     firstName = nameParts[0];
-                } else if (nameParts.length >= 2) {
+                    lastName = '';
+                } else if (nameParts.length === 2) {
+                    // Two word name
+                    firstName = nameParts[0];
+                    lastName = nameParts[1];
+                } else {
+                    // Multiple word name - first word as firstName, rest as lastName
                     firstName = nameParts[0];
                     lastName = nameParts.slice(1).join(' ');
                 }
+            } else {
+                // No name provided
+                firstName = '';
+                lastName = '';
             }
             
             console.log('Parsed name:', { firstName, lastName, originalName: name });
@@ -2738,34 +2755,45 @@ app.post('/api/contacts/add', async (req, res) => {
             
             // Verify the contact was added/updated
             // Use the original chatId string for verification, not the returned object
-            const contact = await client.getContactById(chatId._serialized || chatId);
-            
-            if (contact) {
-                console.log('Contact successfully added/updated:', {
-                    id: contact.id,
-                    name: contact.name,
-                    number: contact.number,
-                    isMyContact: contact.isMyContact,
-                    isWAContact: contact.isWAContact
-                });
+            try {
+                const contact = await client.getContactById(chatId._serialized || chatId);
                 
-                res.json({ 
-                    success: true, 
-                    message: 'Contact successfully added/updated',
-                    contact: {
+                if (contact) {
+                    console.log('Contact successfully added/updated:', {
                         id: contact.id,
                         name: contact.name,
                         number: contact.number,
                         isMyContact: contact.isMyContact,
                         isWAContact: contact.isWAContact
-                    }
-                });
-            } else {
-                console.log('Contact added but could not verify');
+                    });
+                    
+                    res.json({ 
+                        success: true, 
+                        message: 'Contact successfully added/updated',
+                        contact: {
+                            id: contact.id,
+                            name: contact.name,
+                            number: contact.number,
+                            isMyContact: contact.isMyContact,
+                            isWAContact: contact.isWAContact
+                        }
+                    });
+                } else {
+                    console.log('Contact added but could not verify');
+                    res.json({ 
+                        success: true, 
+                        message: 'Contact added but verification failed',
+                        chatId: chatId
+                    });
+                }
+            } catch (verifyErr) {
+                console.log('Verification failed but contact was likely added successfully:', verifyErr.message);
+                // Since saveOrEditAddressbookContact succeeded, we'll consider this a success
                 res.json({ 
                     success: true, 
-                    message: 'Contact added but verification failed',
-                    chatId: chatId
+                    message: 'Contact added successfully (verification failed)',
+                    chatId: chatId,
+                    verificationError: verifyErr.message
                 });
             }
             
