@@ -2543,7 +2543,7 @@ app.post('/api/contacts/check', async (req, res) => {
         
         // Try to get the contact using WhatsApp Web.js methods
         try {
-            const contact = await client.getContactById(chatId);
+            const contact = await client.getContactById(chatId._serialized || chatId);
             
             if (contact) {
                 console.log('Contact found:', {
@@ -2641,7 +2641,7 @@ app.post('/api/contacts/add', async (req, res) => {
         let needsUpdate = false;
         
         try {
-            existingContact = await client.getContactById(chatId);
+            existingContact = await client.getContactById(chatId._serialized || chatId);
             if (existingContact) {
                 console.log('Contact found:', {
                     id: existingContact.id,
@@ -2737,7 +2737,8 @@ app.post('/api/contacts/add', async (req, res) => {
             console.log('saveOrEditAddressbookContact successful, chatId:', chatId);
             
             // Verify the contact was added/updated
-            const contact = await client.getContactById(chatId);
+            // Use the original chatId string for verification, not the returned object
+            const contact = await client.getContactById(chatId._serialized || chatId);
             
             if (contact) {
                 console.log('Contact successfully added/updated:', {
@@ -2773,7 +2774,7 @@ app.post('/api/contacts/add', async (req, res) => {
             
             // Fallback: try to verify if contact exists anyway
             try {
-                const contact = await client.getContactById(chatId);
+                const contact = await client.getContactById(chatId._serialized || chatId);
                 
                 if (contact && contact.isWAContact) {
                     console.log('Contact exists in WhatsApp (fallback verification):', {
