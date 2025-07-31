@@ -160,8 +160,13 @@
                             <input class="w-full border rounded px-3 py-2" type="file" id="media-upload" accept="image/*,video/*,application/pdf">
                         </div>
                         <div id="media-preview-container" class="mb-3 d-none">
-                            <label class="block text-sm font-medium mb-1">Preview</label>
-                            <div class="border rounded p-2 text-center">
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="block text-sm font-medium">Media Preview</label>
+                                <button type="button" id="toggle-media-preview" class="text-blue-600 hover:text-blue-800 text-xs">
+                                    <span id="toggle-media-text">Show</span> Preview
+                                </button>
+                            </div>
+                            <div id="media-preview-content" class="border rounded p-2 text-center hidden">
                                 <img id="image-preview" class="media-preview d-none" alt="Preview">
                                 <video id="video-preview" class="media-preview d-none" controls></video>
                                 <div id="file-preview" class="d-none">

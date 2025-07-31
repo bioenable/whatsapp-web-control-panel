@@ -95,6 +95,13 @@ document.addEventListener('DOMContentLoaded', () => {
         previewTemplateBtn.addEventListener('click', handlePreviewTemplateBtn);
     }
 
+    // Add event listener for recipient input
+    const recipientInput = document.getElementById('recipient-input');
+    if (recipientInput) {
+        recipientInput.addEventListener('input', updateRecipientDisplay);
+        recipientInput.addEventListener('change', updateRecipientDisplay);
+    }
+
     if (refreshChatsBtn) {
         refreshChatsBtn.addEventListener('click', () => {
             loadChats();
@@ -346,8 +353,81 @@ function populateRecipientSelect() {
 // Handle recipient select change (multi-select)
 function handleRecipientSelectChange() {
     selectedChatIds = Array.from(recipientSelect.selectedOptions).map(option => option.value);
+    updateRecipientDisplay();
     renderMessagePreview();
 }
+
+// Update recipient display
+function updateRecipientDisplay() {
+    const recipientListDisplay = document.getElementById('recipient-list-display');
+    const recipientCountDisplay = document.getElementById('recipient-count-display');
+    
+    if (!recipientListDisplay) return;
+    
+    // Get selected chat names
+    const selectedChatNames = selectedChatIds.map(chatId => {
+        const chat = chats.find(c => c.id === chatId);
+        return chat ? chat.name : chatId;
+    });
+    
+    // Get manually entered phone numbers
+    const recipientInput = document.getElementById('recipient-input');
+    const manualRecipients = recipientInput ? recipientInput.value.split(',').map(s => s.trim()).filter(Boolean) : [];
+    
+    // Combine all recipients
+    const allRecipients = [...selectedChatNames, ...manualRecipients];
+    
+    if (allRecipients.length > 0) {
+        recipientListDisplay.innerHTML = `
+            <div class="font-medium text-gray-800 mb-1">Selected Recipients:</div>
+            <div class="space-y-1">
+                ${allRecipients.map(recipient => `
+                    <div class="flex items-center justify-between bg-white rounded px-2 py-1 border">
+                        <span class="text-gray-700">${escapeHtml(recipient)}</span>
+                        <button type="button" class="text-red-500 hover:text-red-700 text-xs" onclick="removeRecipient('${recipient}')">
+                            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                            </svg>
+                        </button>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+        recipientListDisplay.classList.remove('hidden');
+    } else {
+        recipientListDisplay.innerHTML = '';
+        recipientListDisplay.classList.add('hidden');
+    }
+    
+    // Update recipient count
+    if (recipientCountDisplay) {
+        recipientCountDisplay.textContent = allRecipients.length > 0 ? `${allRecipients.length} recipient(s)` : '';
+    }
+}
+
+// Remove recipient function (global)
+window.removeRecipient = function(recipient) {
+    // Check if it's a selected chat
+    const chat = chats.find(c => c.name === recipient);
+    if (chat) {
+        // Remove from selectedChatIds
+        selectedChatIds = selectedChatIds.filter(id => id !== chat.id);
+        // Update select element
+        const option = recipientSelect.querySelector(`option[value="${chat.id}"]`);
+        if (option) option.selected = false;
+    } else {
+        // Remove from manual input
+        const recipientInput = document.getElementById('recipient-input');
+        if (recipientInput) {
+            const currentRecipients = recipientInput.value.split(',').map(s => s.trim()).filter(Boolean);
+            const updatedRecipients = currentRecipients.filter(r => r !== recipient);
+            recipientInput.value = updatedRecipients.join(', ');
+        }
+    }
+    
+    updateRecipientDisplay();
+    renderMessagePreview();
+};
 
 // Select chat and load messages
 function selectChat(chatId) {
@@ -583,39 +663,34 @@ function renderMessages(messages) {
 function renderMessagePreview() {
     const previewArea = document.getElementById('message-preview-area');
     const messageText = document.getElementById('message-text').value;
-    const recipientInput = document.getElementById('recipient-input').value;
-    const recipients = [...selectedChatIds, ...recipientInput.split(',').map(s => s.trim()).filter(Boolean)];
     const mediaFile = mediaUpload.files[0];
     let html = '';
-    if (recipients.length > 0) {
-        html += `<div class='mb-2'><strong>Recipients:</strong> ${recipients.join(', ')}</div>`;
-    }
-    if (mediaFile) {
-        if (mediaFile.type.startsWith('image/')) {
-            html += `<img src='${URL.createObjectURL(mediaFile)}' class='media-preview mb-2' alt='Preview'>`;
-        } else if (mediaFile.type.startsWith('video/')) {
-            html += `<video src='${URL.createObjectURL(mediaFile)}' class='media-preview mb-2' controls></video>`;
-        } else {
-            html += `<div class='mb-2'><i class='bi bi-file-earmark-text'></i> ${mediaFile.name}</div>`;
-        }
-    }
+    
+    // Only show message text preview (recipients are now shown in recipient-list-display)
     if (messageText) {
         html += `<div class='border rounded p-2'>${escapeHtml(messageText).replace(/\n/g, '<br>')}</div>`;
     }
+    
     previewArea.innerHTML = html || '<div class="text-gray-400">Message preview will appear here</div>';
 }
 
 // Handle media upload
 function handleMediaUpload(event) {
     const file = event.target.files[0];
+    const mediaPreviewContainer = document.getElementById('media-preview-container');
+    const mediaPreviewContent = document.getElementById('media-preview-content');
+    const toggleMediaPreview = document.getElementById('toggle-media-preview');
+    const toggleMediaText = document.getElementById('toggle-media-text');
+    
     if (!file) {
-        mediaPreviewContainer.classList.add('d-none');
+        if (mediaPreviewContainer) mediaPreviewContainer.classList.add('d-none');
+        if (mediaPreviewContent) mediaPreviewContent.classList.add('hidden');
         renderMessagePreview();
         return;
     }
     
     // Show preview container
-    mediaPreviewContainer.classList.remove('d-none');
+    if (mediaPreviewContainer) mediaPreviewContainer.classList.remove('d-none');
     
     // Hide all preview elements
     imagePreview.classList.add('d-none');
@@ -633,6 +708,20 @@ function handleMediaUpload(event) {
         fileName.textContent = file.name;
         filePreview.classList.remove('d-none');
     }
+    
+    // Set up toggle functionality
+    if (toggleMediaPreview) {
+        toggleMediaPreview.onclick = function() {
+            if (mediaPreviewContent.classList.contains('hidden')) {
+                mediaPreviewContent.classList.remove('hidden');
+                toggleMediaText.textContent = 'Hide';
+            } else {
+                mediaPreviewContent.classList.add('hidden');
+                toggleMediaText.textContent = 'Show';
+            }
+        };
+    }
+    
     renderMessagePreview();
 }
 
@@ -1278,7 +1367,13 @@ function handlePreviewTemplateBtn() {
 
 function showSendTabMediaPreview(mediaPath) {
     // Simulate file attachment preview for template media
+    const mediaPreviewContainer = document.getElementById('media-preview-container');
+    const mediaPreviewContent = document.getElementById('media-preview-content');
+    const toggleMediaPreview = document.getElementById('toggle-media-preview');
+    const toggleMediaText = document.getElementById('toggle-media-text');
+    
     if (!mediaPreviewContainer) return;
+    
     mediaPreviewContainer.classList.remove('d-none');
     imagePreview.classList.add('d-none');
     videoPreview.classList.add('d-none');
@@ -1297,11 +1392,30 @@ function showSendTabMediaPreview(mediaPath) {
         fileName.textContent = mediaPath.split('/').pop();
         filePreview.classList.remove('d-none');
     }
+    
+    // Set up toggle functionality
+    if (toggleMediaPreview) {
+        toggleMediaPreview.onclick = function() {
+            if (mediaPreviewContent.classList.contains('hidden')) {
+                mediaPreviewContent.classList.remove('hidden');
+                toggleMediaText.textContent = 'Hide';
+            } else {
+                mediaPreviewContent.classList.add('hidden');
+                toggleMediaText.textContent = 'Show';
+            }
+        };
+    }
 }
 
 function clearSendTabMediaPreview() {
+    const mediaPreviewContainer = document.getElementById('media-preview-container');
+    const mediaPreviewContent = document.getElementById('media-preview-content');
+    
     if (mediaPreviewContainer) {
         mediaPreviewContainer.classList.add('d-none');
+    }
+    if (mediaPreviewContent) {
+        mediaPreviewContent.classList.add('hidden');
     }
 }
 
