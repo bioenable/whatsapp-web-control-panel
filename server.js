@@ -2706,15 +2706,41 @@ app.post('/api/contacts/add', async (req, res) => {
             }
         }
         
-        // Since saveOrEditAddressbookContact is consistently failing, use alternative approach
-        console.log('Using alternative contact verification method since saveOrEditAddressbookContact is failing');
-        
+        // Try to add or update contact using saveOrEditAddressbookContact
         try {
-            // Get the contact to verify it exists
+            console.log('Attempting to add/update contact using saveOrEditAddressbookContact...');
+            
+            // Parse name into firstName and lastName
+            let firstName = name || '';
+            let lastName = '';
+            
+            if (name && name.trim()) {
+                const nameParts = name.trim().split(' ');
+                if (nameParts.length === 1) {
+                    firstName = nameParts[0];
+                } else if (nameParts.length >= 2) {
+                    firstName = nameParts[0];
+                    lastName = nameParts.slice(1).join(' ');
+                }
+            }
+            
+            console.log('Parsed name:', { firstName, lastName, originalName: name });
+            
+            // Call saveOrEditAddressbookContact with syncToAddressbook = true
+            const chatId = await client.saveOrEditAddressbookContact(
+                normalizedNumber, 
+                firstName, 
+                lastName, 
+                true // syncToAddressbook = true
+            );
+            
+            console.log('saveOrEditAddressbookContact successful, chatId:', chatId);
+            
+            // Verify the contact was added/updated
             const contact = await client.getContactById(chatId);
             
-            if (contact && contact.isWAContact) {
-                console.log('Contact exists in WhatsApp:', {
+            if (contact) {
+                console.log('Contact successfully added/updated:', {
                     id: contact.id,
                     name: contact.name,
                     number: contact.number,
@@ -2722,34 +2748,45 @@ app.post('/api/contacts/add', async (req, res) => {
                     isWAContact: contact.isWAContact
                 });
                 
-                // Check if contact name needs updating
-                const hasProperName = contact.name && 
-                                    contact.name !== 'undefined' && 
-                                    contact.name !== undefined && 
-                                    contact.name !== `Contact ${normalizedNumber}` && 
-                                    contact.name !== normalizedNumber;
+                res.json({ 
+                    success: true, 
+                    message: 'Contact successfully added/updated',
+                    contact: {
+                        id: contact.id,
+                        name: contact.name,
+                        number: contact.number,
+                        isMyContact: contact.isMyContact,
+                        isWAContact: contact.isWAContact
+                    }
+                });
+            } else {
+                console.log('Contact added but could not verify');
+                res.json({ 
+                    success: true, 
+                    message: 'Contact added but verification failed',
+                    chatId: chatId
+                });
+            }
+            
+        } catch (addErr) {
+            console.error('Error adding/updating contact with saveOrEditAddressbookContact:', addErr);
+            
+            // Fallback: try to verify if contact exists anyway
+            try {
+                const contact = await client.getContactById(chatId);
                 
-                if (hasProperName) {
-                    console.log('Contact already has proper name:', contact.name);
-                    res.json({ 
-                        success: true, 
-                        message: 'Contact exists with proper name',
-                        contact: {
-                            id: contact.id,
-                            name: contact.name,
-                            number: contact.number,
-                            isMyContact: contact.isMyContact,
-                            isWAContact: contact.isWAContact
-                        }
+                if (contact && contact.isWAContact) {
+                    console.log('Contact exists in WhatsApp (fallback verification):', {
+                        id: contact.id,
+                        name: contact.name,
+                        number: contact.number,
+                        isMyContact: contact.isMyContact,
+                        isWAContact: contact.isWAContact
                     });
-                } else {
-                    console.log('Contact exists but needs name update. Since saveOrEditAddressbookContact is failing, we will consider this a partial success.');
                     
-                    // For now, we'll consider this a success since the contact exists in WhatsApp
-                    // The name update will need to be done manually or through a different method
                     res.json({ 
                         success: true, 
-                        message: 'Contact exists in WhatsApp but name update failed. Manual update may be required.',
+                        message: 'Contact exists in WhatsApp but name update may have failed',
                         contact: {
                             id: contact.id,
                             name: contact.name,
@@ -2757,24 +2794,24 @@ app.post('/api/contacts/add', async (req, res) => {
                             isMyContact: contact.isMyContact,
                             isWAContact: contact.isWAContact
                         },
-                        needsManualNameUpdate: true
+                        needsManualNameUpdate: contact.name === undefined || contact.name === 'undefined'
+                    });
+                } else {
+                    console.log('Contact does not exist in WhatsApp');
+                    res.status(404).json({ 
+                        success: false, 
+                        error: 'Contact not found in WhatsApp',
+                        details: 'The contact does not exist in WhatsApp'
                     });
                 }
-            } else {
-                console.log('Contact does not exist in WhatsApp');
-                res.status(404).json({ 
+            } catch (verifyErr) {
+                console.error('Error in fallback contact verification:', verifyErr);
+                res.status(500).json({ 
                     success: false, 
-                    error: 'Contact not found in WhatsApp',
-                    details: 'The contact does not exist in WhatsApp'
+                    error: 'Failed to add or verify contact', 
+                    details: addErr.message 
                 });
             }
-        } catch (err) {
-            console.error('Error in alternative contact verification:', err);
-            res.status(500).json({ 
-                success: false, 
-                error: 'Failed to verify contact', 
-                details: err.message 
-            });
         }
     } catch (err) {
         console.error('Error adding contact:', err);
