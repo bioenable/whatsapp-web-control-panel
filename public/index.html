@@ -174,8 +174,16 @@
                                 </div>
                             </div>
                         </div>
-                        <div id="message-preview-area" class="mb-4">
-                            <!-- Live message preview will be rendered here by JS -->
+                        <div id="message-preview-container" class="mb-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="block text-sm font-medium">Message Preview</label>
+                                <button type="button" id="toggle-message-preview" class="text-blue-600 hover:text-blue-800 text-xs">
+                                    <span id="toggle-preview-text">Show</span> Preview
+                                </button>
+                            </div>
+                            <div id="message-preview-area" class="hidden border rounded p-4 bg-gray-50">
+                                <!-- WhatsApp-style message preview will be rendered here by JS -->
+                            </div>
                         </div>
                         <div class="flex items-center gap-4">
                             <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700" id="send-btn">

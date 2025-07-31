@@ -102,6 +102,47 @@ document.addEventListener('DOMContentLoaded', () => {
         recipientInput.addEventListener('change', updateRecipientDisplay);
     }
 
+    // Add event listeners for message content changes
+    const messageText = document.getElementById('message-text');
+    const mediaUpload = document.getElementById('media-upload');
+    
+    if (messageText) {
+        messageText.addEventListener('input', renderMessagePreview);
+    }
+    
+    if (mediaUpload) {
+        mediaUpload.addEventListener('change', renderMessagePreview);
+    }
+
+    // Add event listener for recipient select to handle selection completion
+    if (recipientSelect) {
+        recipientSelect.addEventListener('blur', () => {
+            // Force update when user finishes selecting
+            if (recipientUpdateTimeout) {
+                clearTimeout(recipientUpdateTimeout);
+            }
+            updateRecipientDisplay();
+            renderMessagePreview();
+        });
+    }
+
+    // Add event listener for message preview toggle
+    const toggleMessagePreview = document.getElementById('toggle-message-preview');
+    const messagePreviewArea = document.getElementById('message-preview-area');
+    const togglePreviewText = document.getElementById('toggle-preview-text');
+    
+    if (toggleMessagePreview && messagePreviewArea && togglePreviewText) {
+        toggleMessagePreview.addEventListener('click', () => {
+            if (messagePreviewArea.classList.contains('hidden')) {
+                messagePreviewArea.classList.remove('hidden');
+                togglePreviewText.textContent = 'Hide';
+            } else {
+                messagePreviewArea.classList.add('hidden');
+                togglePreviewText.textContent = 'Show';
+            }
+        });
+    }
+
     if (refreshChatsBtn) {
         refreshChatsBtn.addEventListener('click', () => {
             loadChats();
@@ -351,10 +392,20 @@ function populateRecipientSelect() {
 }
 
 // Handle recipient select change (multi-select)
+let recipientUpdateTimeout = null;
+
 function handleRecipientSelectChange() {
     selectedChatIds = Array.from(recipientSelect.selectedOptions).map(option => option.value);
-    updateRecipientDisplay();
-    renderMessagePreview();
+    
+    // Debounce the update to prevent interruption during multiple selection
+    if (recipientUpdateTimeout) {
+        clearTimeout(recipientUpdateTimeout);
+    }
+    
+    recipientUpdateTimeout = setTimeout(() => {
+        updateRecipientDisplay();
+        renderMessagePreview();
+    }, 500); // 500ms delay to allow for multiple selections
 }
 
 // Update recipient display
@@ -664,14 +715,98 @@ function renderMessagePreview() {
     const previewArea = document.getElementById('message-preview-area');
     const messageText = document.getElementById('message-text').value;
     const mediaFile = mediaUpload.files[0];
+    const templateId = templateSelect ? templateSelect.value : '';
+    
     let html = '';
     
-    // Only show message text preview (recipients are now shown in recipient-list-display)
-    if (messageText) {
-        html += `<div class='border rounded p-2'>${escapeHtml(messageText).replace(/\n/g, '<br>')}</div>`;
+    // Get template media if template is selected
+    let templateMedia = '';
+    if (templateId) {
+        const templates = window.sendTabTemplates || [];
+        const t = templates.find(t => t.id === templateId);
+        if (t && t.media) {
+            templateMedia = t.media;
+        }
     }
     
-    previewArea.innerHTML = html || '<div class="text-gray-400">Message preview will appear here</div>';
+    // Create WhatsApp-style preview
+    if (mediaFile || templateMedia) {
+        // Media first (WhatsApp style)
+        if (mediaFile) {
+            if (mediaFile.type.startsWith('image/')) {
+                html += `<div class="mb-3">
+                    <img src="${URL.createObjectURL(mediaFile)}" class="max-w-full max-h-64 rounded" alt="Preview">
+                </div>`;
+            } else if (mediaFile.type.startsWith('video/')) {
+                html += `<div class="mb-3">
+                    <video src="${URL.createObjectURL(mediaFile)}" class="max-w-full max-h-64 rounded" controls></video>
+                </div>`;
+            } else {
+                html += `<div class="mb-3 p-3 bg-white rounded border flex items-center">
+                    <svg class="w-8 h-8 text-gray-500 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    <div>
+                        <div class="font-medium text-gray-900">${mediaFile.name}</div>
+                        <div class="text-sm text-gray-500">${(mediaFile.size / 1024 / 1024).toFixed(2)} MB</div>
+                    </div>
+                </div>`;
+            }
+        } else if (templateMedia) {
+            const isImage = /\.(jpg|jpeg|png|gif|webp)$/i.test(templateMedia);
+            const isVideo = /\.(mp4|avi|mov|webm)$/i.test(templateMedia);
+            
+            if (isImage) {
+                html += `<div class="mb-3">
+                    <img src="${templateMedia}" class="max-w-full max-h-64 rounded" alt="Preview">
+                </div>`;
+            } else if (isVideo) {
+                html += `<div class="mb-3">
+                    <video src="${templateMedia}" class="max-w-full max-h-64 rounded" controls></video>
+                </div>`;
+            } else {
+                const fileName = templateMedia.split('/').pop();
+                html += `<div class="mb-3 p-3 bg-white rounded border flex items-center">
+                    <svg class="w-8 h-8 text-gray-500 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                    </svg>
+                    <div>
+                        <div class="font-medium text-gray-900">${fileName}</div>
+                        <div class="text-sm text-gray-500">Template Media</div>
+                    </div>
+                </div>`;
+            }
+        }
+    }
+    
+    // Text content (below media in WhatsApp style)
+    if (messageText) {
+        // Process links and formatting
+        const processedText = processWhatsAppText(messageText);
+        html += `<div class="bg-white rounded-lg p-3 shadow-sm">
+            <div class="text-gray-900 whitespace-pre-wrap">${processedText}</div>
+        </div>`;
+    }
+    
+    previewArea.innerHTML = html || '<div class="text-gray-400 text-center py-4">No content to preview</div>';
+}
+
+// Process WhatsApp-style text formatting
+function processWhatsAppText(text) {
+    if (!text) return '';
+    
+    let processed = escapeHtml(text);
+    
+    // Convert URLs to clickable links with preview
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    processed = processed.replace(urlRegex, (url) => {
+        return `<a href="${url}" target="_blank" class="text-blue-600 hover:text-blue-800 underline">${url}</a>`;
+    });
+    
+    // Convert line breaks
+    processed = processed.replace(/\n/g, '<br>');
+    
+    return processed;
 }
 
 // Handle media upload
