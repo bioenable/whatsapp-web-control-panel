@@ -1487,6 +1487,9 @@
     // Silent processing for auto updates
     function processNewLeadsSilent(apiLeads) {
         try {
+            console.log(`Auto-fetch: Processing ${apiLeads.length} leads from API`);
+            console.log(`Auto-fetch: Current leadsData has ${leadsData.length} records`);
+            
             const existingLeads = [...leadsData];
             const newLeads = [];
             const mobileMap = new Map();
@@ -1498,11 +1501,26 @@
                     mobileMap.set(mobile, lead);
                 }
             });
+            
+            console.log(`Auto-fetch: Created mobile map with ${mobileMap.size} unique existing leads`);
 
             // Process new leads - only add if mobile doesn't exist or if newer
+            let processedCount = 0;
+            let newCount = 0;
+            let updatedCount = 0;
+            
             apiLeads.forEach(lead => {
                 const mobile = lead.mobile;
                 const existingLead = mobileMap.get(mobile);
+                processedCount++;
+                
+                if (!existingLead) {
+                    console.log(`Auto-fetch: New lead found - ${lead.name} (${mobile})`);
+                    newCount++;
+                } else if (new Date(lead.created_on) > new Date(existingLead.created_on)) {
+                    console.log(`Auto-fetch: Updated lead found - ${lead.name} (${mobile}) - Old: ${existingLead.created_on}, New: ${lead.created_on}`);
+                    updatedCount++;
+                }
                 
                 if (!existingLead || new Date(lead.created_on) > new Date(existingLead.created_on)) {
                     const newLead = {
@@ -1510,8 +1528,9 @@
                         id: `${lead.email}-${lead.mobile}-${lead.created_on}`,
                         processed: false,
                         chat_started: false,
-                        auto_chat_enabled: false,
-                        auto_chat_logs: [],
+                        auto_chat_enabled: false, // Individual auto chat control
+                        auto_chat_logs: existingLead ? existingLead.auto_chat_logs || [] : [], // Preserve existing logs
+                        contact_added: existingLead ? existingLead.contact_added || false : false, // Contact status
                         last_updated: new Date().toISOString()
                     };
                     
@@ -1527,6 +1546,8 @@
                     mobileMap.set(mobile, newLead);
                 }
             });
+            
+            console.log(`Auto-fetch: Processed ${processedCount} API leads - ${newCount} new, ${updatedCount} updated`);
 
             if (newLeads.length > 0) {
                 console.log(`Auto-fetch: Found ${newLeads.length} new/updated leads`);
@@ -2146,6 +2167,35 @@
             isProcessingContacts = false;
         }
     }
+
+    // Manual API fetch for testing
+    window.manualFetchLeads = async function() {
+        console.log('Manual fetch: Starting manual API fetch...');
+        try {
+            const response = await fetch('/api/proxy/leads', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log(`Manual fetch: API returned ${data.data ? data.data.length : 0} leads`);
+            
+            if (data.success && data.data) {
+                processNewLeadsSilent(data.data);
+                console.log('Manual fetch: Processing completed');
+            } else {
+                console.error('Manual fetch: API returned error:', data);
+            }
+        } catch (err) {
+            console.error('Manual fetch: Failed to fetch leads from API:', err);
+        }
+    };
 
     // Individual contact retry function (for red icon clicks)
     window.retryContactAddition = async function(mobile, name) {
