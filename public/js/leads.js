@@ -103,11 +103,7 @@
             leadsTestBtn.addEventListener('click', testAutoChat);
         }
 
-        // Add contacts button
-        const leadsAddContactsBtn = document.getElementById('leads-add-contacts-btn');
-        if (leadsAddContactsBtn) {
-            leadsAddContactsBtn.addEventListener('click', addAllLeadsToContacts);
-        }
+
 
         // Tab switching functionality
         const tabButtons = document.querySelectorAll('.tab-btn');
@@ -164,6 +160,9 @@
         // Initialize leads data
         loadLeadsData();
         await loadAutoChatConfig();
+        
+        // Start automatic contact processing
+        startAutomaticContactProcessing();
         
         // Fetch fresh data from API after loading local data
         setTimeout(() => {
@@ -314,6 +313,7 @@
                         chat_started: false,
                         auto_chat_enabled: false, // Individual auto chat control
                         auto_chat_logs: existingLead ? existingLead.auto_chat_logs || [] : [], // Preserve existing logs
+                        contact_added: existingLead ? existingLead.contact_added || false : false, // Contact status
                         last_updated: new Date().toISOString()
                     };
                     
@@ -433,7 +433,9 @@
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     ${leadsFilteredData.map(lead => {
-                        const contactIconColor = contactsCache.get(lead.mobile) ? 'text-green-600' : 'text-red-600';
+                        const contactIconColor = lead.contact_added ? 'text-green-600' : 'text-red-600';
+                        const contactTitle = lead.contact_added ? 'Contact exists in WhatsApp' : 'Click to retry adding contact';
+                        const contactOnClick = lead.contact_added ? 'javascript:void(0)' : `retryContactAddition('${lead.mobile}', '${escapeHtml(lead.name)}')`;
                         return `
                             <tr class="border-b hover:bg-gray-50">
                                 <td class="px-3 py-2">
@@ -456,10 +458,10 @@
                                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
                                                 </svg>
                                             </button>
-                                            <button onclick="toggleContactStatus('${lead.mobile}', '${escapeHtml(lead.name)}')" 
+                                            <button onclick="${contactOnClick}" 
                                                     data-mobile="${lead.mobile}"
-                                                    class="contact-status-btn p-1 rounded hover:bg-gray-50" 
-                                                    title="${contactsCache.get(lead.mobile) ? 'Contact exists in WhatsApp' : 'Click to add to WhatsApp contacts'}">
+                                                    class="contact-status-btn p-1 rounded hover:bg-gray-50 ${!lead.contact_added ? 'cursor-pointer' : 'cursor-default'}" 
+                                                    title="${contactTitle}">
                                                 <svg class="w-4 h-4 contact-status-icon ${contactIconColor}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
                                                 </svg>
@@ -520,6 +522,7 @@
                                             <strong>Mobile:</strong> ${escapeHtml(lead.mobile)}<br>
                                             <strong>Type:</strong> ${escapeHtml(lead.Type)}<br>
                                             <strong>Created:</strong> ${formatDateTime(lead.created_on)}<br>
+                                            <strong>Contact Added:</strong> ${lead.contact_added ? 'Yes' : 'No'}<br>
                                             <strong>Auto Chat:</strong> ${lead.auto_chat_enabled ? 'Enabled' : 'Disabled'}<br>
                                             <strong>Auto Chat Messages:</strong> ${lead.auto_chat_logs ? lead.auto_chat_logs.length : 0}
                                         </div>
@@ -1705,94 +1708,9 @@
         }
     }
 
-    // Toggle contact status (add if not in contacts) - INDIVIDUAL CONTACT ONLY
-    window.toggleContactStatus = async function(mobile, name) {
-        console.log('toggleContactStatus called for:', mobile, name);
-        
-        // Check if this specific contact exists with proper name
-        const isInContacts = contactsCache.get(mobile);
-        console.log('Contact in cache for', mobile, ':', isInContacts);
-        
-        if (isInContacts) {
-            showLeadsStatus('Contact already exists in WhatsApp with proper name', 'info');
-            return;
-        }
-        
-        try {
-            showLeadsStatus('Adding/updating contact in WhatsApp...', 'info');
-            const success = await addContact(mobile, name);
-            if (success) {
-                // Update cache for this specific contact only
-                contactsCache.set(mobile, true);
-                showLeadsStatus('Contact added/updated successfully!', 'success');
-                
-                // Update only this specific icon
-                const btn = document.querySelector(`[data-mobile="${mobile}"]`);
-                if (btn) {
-                    const icon = btn.querySelector('.contact-status-icon');
-                    if (icon) {
-                        icon.classList.remove('text-red-600');
-                        icon.classList.add('text-green-600');
-                        console.log('Updated icon color for', mobile);
-                    }
-                }
-            } else {
-                showLeadsStatus('Failed to add/update contact', 'error');
-            }
-        } catch (err) {
-            console.error('Error adding contact:', err);
-            showLeadsStatus('Error adding contact: ' + err.message, 'error');
-        }
-    }
 
-    // Check contact status for all leads - ONLY CALLED FROM "ADD ALL TO CONTACTS" BUTTON
-    async function checkAllContactStatuses() {
-        if (!leadsFilteredData || leadsFilteredData.length === 0) {
-            console.log('No leads data to check contacts for');
-            return;
-        }
-        
-        console.log('Checking contact statuses for', leadsFilteredData.length, 'leads');
-        
-        // Clear the cache first
-        contactsCache.clear();
-        
-        for (const lead of leadsFilteredData) {
-            try {
-                const exists = await checkContactStatus(lead.mobile);
-                contactsCache.set(lead.mobile, exists);
-                console.log(`Contact ${lead.mobile}: ${exists ? 'EXISTS' : 'NOT FOUND'}`);
-                
-                // Small delay to avoid overwhelming the server
-                await new Promise(resolve => setTimeout(resolve, 100));
-            } catch (err) {
-                console.error('Error checking contact for', lead.mobile, ':', err);
-                contactsCache.set(lead.mobile, false);
-            }
-        }
-        
-        console.log('Contact status check completed. Cache size:', contactsCache.size);
-        updateContactStatusIcons();
-    }
 
-    // Update contact status icons based on cache
-    function updateContactStatusIcons() {
-        const contactButtons = document.querySelectorAll('[data-mobile]');
-        contactButtons.forEach(btn => {
-            const mobile = btn.getAttribute('data-mobile');
-            const icon = btn.querySelector('.contact-status-icon');
-            if (icon) {
-                const exists = contactsCache.get(mobile);
-                if (exists) {
-                    icon.classList.remove('text-red-600');
-                    icon.classList.add('text-green-600');
-                } else {
-                    icon.classList.remove('text-green-600');
-                    icon.classList.add('text-red-600');
-                }
-            }
-        });
-    }
+
 
     // Test API configuration
     async function testApiConfiguration() {
@@ -2062,6 +1980,115 @@
             content.classList.remove('max-h-96', 'overflow-y-auto');
             content.classList.add('max-h-16', 'overflow-hidden');
             button.textContent = 'Show more';
+        }
+    };
+
+    // Automatic contact management system
+    let contactProcessingInterval = null;
+    let isProcessingContacts = false;
+
+    // Start automatic contact processing
+    function startAutomaticContactProcessing() {
+        if (contactProcessingInterval) {
+            clearInterval(contactProcessingInterval);
+        }
+        
+        // Process contacts every 30 seconds in the background
+        contactProcessingInterval = setInterval(async () => {
+            if (!isProcessingContacts && leadsData.length > 0) {
+                await processContactsInBackground();
+            }
+        }, 30000); // 30 seconds
+        
+        // Also process immediately when leads are loaded
+        setTimeout(async () => {
+            if (leadsData.length > 0) {
+                await processContactsInBackground();
+            }
+        }, 2000); // 2 seconds after page load
+    }
+
+    // Process contacts in background without affecting UI
+    async function processContactsInBackground() {
+        if (isProcessingContacts) return;
+        
+        isProcessingContacts = true;
+        console.log('[CONTACTS] Starting background contact processing...');
+        
+        try {
+            const leadsNeedingContacts = leadsData.filter(lead => !lead.contact_added);
+            
+            if (leadsNeedingContacts.length === 0) {
+                console.log('[CONTACTS] All leads already have contacts added');
+                return;
+            }
+            
+            console.log(`[CONTACTS] Processing ${leadsNeedingContacts.length} leads for contact addition`);
+            
+            let successCount = 0;
+            let failCount = 0;
+            
+            for (const lead of leadsNeedingContacts) {
+                try {
+                    console.log(`[CONTACTS] Processing contact for ${lead.mobile} (${lead.name})`);
+                    const success = await addContact(lead.mobile, lead.name);
+                    
+                    if (success) {
+                        // Update the lead's contact status
+                        lead.contact_added = true;
+                        successCount++;
+                        console.log(`[CONTACTS] Successfully added contact for ${lead.mobile}`);
+                    } else {
+                        failCount++;
+                        console.log(`[CONTACTS] Failed to add contact for ${lead.mobile}`);
+                    }
+                    
+                    // Small delay to avoid overwhelming the server
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                } catch (err) {
+                    console.error(`[CONTACTS] Error processing contact for ${lead.mobile}:`, err);
+                    failCount++;
+                }
+            }
+            
+            // Save updated leads data if any contacts were successfully added
+            if (successCount > 0) {
+                saveLeadsData(leadsData);
+                console.log(`[CONTACTS] Successfully processed ${successCount} contacts, ${failCount} failed`);
+            }
+            
+        } catch (err) {
+            console.error('[CONTACTS] Error in background contact processing:', err);
+        } finally {
+            isProcessingContacts = false;
+        }
+    }
+
+    // Individual contact retry function (for red icon clicks)
+    window.retryContactAddition = async function(mobile, name) {
+        console.log(`[CONTACTS] Retrying contact addition for ${mobile} (${name})`);
+        
+        try {
+            const success = await addContact(mobile, name);
+            
+            if (success) {
+                // Find and update the lead's contact status
+                const lead = leadsData.find(l => l.mobile === mobile);
+                if (lead) {
+                    lead.contact_added = true;
+                    saveLeadsData(leadsData);
+                    console.log(`[CONTACTS] Successfully retried contact addition for ${mobile}`);
+                    
+                    // Update the UI
+                    renderLeadsList();
+                    showLeadsStatus(`Contact added successfully for ${name}`, 'success');
+                }
+            } else {
+                showLeadsStatus(`Failed to add contact for ${name}. Please try again.`, 'error');
+            }
+        } catch (err) {
+            console.error(`[CONTACTS] Error retrying contact addition for ${mobile}:`, err);
+            showLeadsStatus(`Error adding contact for ${name}: ${err.message}`, 'error');
         }
     };
 })(); 
