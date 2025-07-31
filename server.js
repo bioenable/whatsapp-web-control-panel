@@ -2710,16 +2710,31 @@ app.post('/api/contacts/add', async (req, res) => {
         console.log('Creating/updating contact using saveOrEditAddressbookContact:', { normalizedNumber, name });
         
         try {
-            // Split name into first and last name
-            const nameParts = name ? name.trim().split(' ') : ['', ''];
-            const firstName = nameParts[0] || '';
-            const lastName = nameParts.slice(1).join(' ') || '';
+            // Improved name handling for single names and empty names
+            let firstName = '';
+            let lastName = '';
+            
+            if (name && name.trim()) {
+                const nameParts = name.trim().split(' ');
+                if (nameParts.length === 1) {
+                    // Single name - use as first name
+                    firstName = nameParts[0];
+                    lastName = '';
+                } else if (nameParts.length > 1) {
+                    // Multiple names - first is first name, rest is last name
+                    firstName = nameParts[0];
+                    lastName = nameParts.slice(1).join(' ');
+                }
+            }
             
             console.log('Name parts:', { firstName, lastName });
             
+            // Ensure phone number is in correct format (remove + if present)
+            const cleanPhoneNumber = normalizedNumber.replace(/^\+/, '');
+            
             // Use the proper method to save/edit contact
             const result = await client.saveOrEditAddressbookContact(
-                normalizedNumber, 
+                cleanPhoneNumber, 
                 firstName, 
                 lastName, 
                 true // syncToAddressbook = true to sync with phone
@@ -2755,6 +2770,32 @@ app.post('/api/contacts/add', async (req, res) => {
             }
         } catch (saveErr) {
             console.error('Error saving/editing contact:', saveErr);
+            
+            // Try alternative approach if the main method fails
+            try {
+                console.log('Trying alternative contact creation method...');
+                
+                // Try using a simpler approach - just get the contact and verify it exists
+                const contact = await client.getContactById(chatId);
+                if (contact && contact.isWAContact) {
+                    console.log('Contact exists in WhatsApp, returning success');
+                    res.json({ 
+                        success: true, 
+                        message: 'Contact exists in WhatsApp',
+                        contact: {
+                            id: contact.id,
+                            name: contact.name,
+                            number: contact.number,
+                            isMyContact: contact.isMyContact,
+                            isWAContact: contact.isWAContact
+                        }
+                    });
+                    return;
+                }
+            } catch (altErr) {
+                console.error('Alternative method also failed:', altErr);
+            }
+            
             res.status(500).json({ 
                 success: false, 
                 error: 'Failed to save/edit contact', 

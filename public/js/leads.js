@@ -182,6 +182,14 @@
                 })
                 .then(data => {
                     leadsData = data.leads || [];
+                    
+                    // Ensure all leads have contact_added field initialized
+                    leadsData.forEach(lead => {
+                        if (lead.contact_added === undefined) {
+                            lead.contact_added = false;
+                        }
+                    });
+                    
                     leadsFilteredData = [...leadsData];
                     renderLeadsList();
                     updateLeadsCount();
@@ -433,6 +441,11 @@
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
                     ${leadsFilteredData.map(lead => {
+                        // Ensure contact_added is properly initialized
+                        if (lead.contact_added === undefined) {
+                            lead.contact_added = false;
+                        }
+                        
                         const contactIconColor = lead.contact_added ? 'text-green-600' : 'text-red-600';
                         const contactTitle = lead.contact_added ? 'Contact exists in WhatsApp' : 'Click to retry adding contact';
                         const contactOnClick = lead.contact_added ? 'javascript:void(0)' : `retryContactAddition('${lead.mobile}', '${escapeHtml(lead.name)}')`;
@@ -2016,10 +2029,11 @@
         console.log('[CONTACTS] Starting background contact processing...');
         
         try {
-            const leadsNeedingContacts = leadsData.filter(lead => !lead.contact_added);
+            // Only process leads that don't have contact_added set to true
+            const leadsNeedingContacts = leadsData.filter(lead => lead.contact_added !== true);
             
             if (leadsNeedingContacts.length === 0) {
-                console.log('[CONTACTS] All leads already have contacts added');
+                console.log('[CONTACTS] All leads already have contacts added (contact_added: true)');
                 return;
             }
             
@@ -2039,6 +2053,8 @@
                         successCount++;
                         console.log(`[CONTACTS] Successfully added contact for ${lead.mobile}`);
                     } else {
+                        // Ensure contact_added is set to false for failed attempts
+                        lead.contact_added = false;
                         failCount++;
                         console.log(`[CONTACTS] Failed to add contact for ${lead.mobile}`);
                     }
@@ -2047,12 +2063,14 @@
                     await new Promise(resolve => setTimeout(resolve, 500));
                 } catch (err) {
                     console.error(`[CONTACTS] Error processing contact for ${lead.mobile}:`, err);
+                    // Ensure contact_added is set to false for errors
+                    lead.contact_added = false;
                     failCount++;
                 }
             }
             
-            // Save updated leads data if any contacts were successfully added
-            if (successCount > 0) {
+            // Save updated leads data if any contacts were processed
+            if (successCount > 0 || failCount > 0) {
                 saveLeadsData(leadsData);
                 console.log(`[CONTACTS] Successfully processed ${successCount} contacts, ${failCount} failed`);
             }
@@ -2084,10 +2102,22 @@
                     showLeadsStatus(`Contact added successfully for ${name}`, 'success');
                 }
             } else {
+                // Ensure contact_added is set to false for failed attempts
+                const lead = leadsData.find(l => l.mobile === mobile);
+                if (lead) {
+                    lead.contact_added = false;
+                    saveLeadsData(leadsData);
+                }
                 showLeadsStatus(`Failed to add contact for ${name}. Please try again.`, 'error');
             }
         } catch (err) {
             console.error(`[CONTACTS] Error retrying contact addition for ${mobile}:`, err);
+            // Ensure contact_added is set to false for errors
+            const lead = leadsData.find(l => l.mobile === mobile);
+            if (lead) {
+                lead.contact_added = false;
+                saveLeadsData(leadsData);
+            }
             showLeadsStatus(`Error adding contact for ${name}: ${err.message}`, 'error');
         }
     };
