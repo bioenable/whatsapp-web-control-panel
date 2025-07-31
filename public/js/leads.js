@@ -2213,6 +2213,17 @@
         }
     };
 
+    // Test auto-fetch initialization
+    window.testAutoFetch = function() {
+        console.log('Test auto-fetch: Testing auto-fetch initialization...');
+        console.log('Test auto-fetch: Current leadsData length:', leadsData.length);
+        console.log('Test auto-fetch: Current fetchInterval:', fetchInterval);
+        
+        // Test immediate fetch
+        console.log('Test auto-fetch: Triggering immediate fetch...');
+        silentFetchLeadsFromAPI();
+    };
+
     // Individual contact retry function (for red icon clicks)
     window.retryContactAddition = async function(mobile, name) {
         console.log(`[CONTACTS] Retrying contact addition for ${mobile} (${name})`);
