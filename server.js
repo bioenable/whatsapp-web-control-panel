@@ -2680,6 +2680,238 @@ app.get('/api/contacts/test', (req, res) => {
     res.json({ success: true, message: 'Contacts API is working' });
 });
 
+// Process leads contacts - add contacts for leads with failed/error status
+app.post('/api/leads/process-contacts', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    
+    try {
+        console.log('[LEADS] Processing contacts for leads...');
+        
+        // Read leads data
+        const leadsData = readJson(LEADS_FILE);
+        const leadsNeedingContacts = leadsData.filter(lead => 
+            lead.contact_added !== true && 
+            lead.contact_added !== 'error' &&
+            lead.mobile
+        );
+        
+        console.log(`[LEADS] Found ${leadsNeedingContacts.length} leads needing contacts`);
+        
+        if (leadsNeedingContacts.length === 0) {
+            return res.json({
+                success: true,
+                message: 'No leads need contact processing',
+                processed: 0,
+                successful: 0,
+                failed: 0
+            });
+        }
+        
+        const results = [];
+        const logs = [];
+        
+        for (let i = 0; i < leadsNeedingContacts.length; i++) {
+            const lead = leadsNeedingContacts[i];
+            const { mobile, name } = lead;
+            
+            logs.push(`[${i + 1}] 📞 Processing: ${mobile} (${name})`);
+            
+            try {
+                // Normalize phone number
+                const normalizedNumber = mobile.replace(/[^0-9]/g, '');
+                const chatId = normalizedNumber + '@c.us';
+                
+                // Check if contact already exists
+                let contactExists = false;
+                let existingContact = null;
+                
+                try {
+                    existingContact = await client.getContactById(chatId);
+                    if (existingContact && existingContact.isMyContact) {
+                        // Check if contact has proper name
+                        const hasProperName = existingContact.name && 
+                                            existingContact.name !== 'undefined' && 
+                                            existingContact.name !== undefined && 
+                                            existingContact.name !== `Contact ${normalizedNumber}` && 
+                                            existingContact.name !== normalizedNumber;
+                        
+                        if (hasProperName) {
+                            logs.push(`[${i + 1}] ✅ Contact already exists with proper name: ${existingContact.name}`);
+                            results.push({
+                                index: i,
+                                success: true,
+                                message: 'Contact already exists with proper name',
+                                contact: {
+                                    id: existingContact.id,
+                                    name: existingContact.name,
+                                    number: existingContact.number,
+                                    isMyContact: existingContact.isMyContact,
+                                    isWAContact: existingContact.isWAContact
+                                }
+                            });
+                            contactExists = true;
+                        } else {
+                            logs.push(`[${i + 1}] ⚠️ Contact exists but needs name update: ${existingContact.name} -> ${name}`);
+                        }
+                    }
+                } catch (err) {
+                    logs.push(`[${i + 1}] ℹ️ Contact check failed, will add: ${err.message}`);
+                }
+                
+                if (!contactExists) {
+                    // Parse name into firstName and lastName
+                    let firstName = '';
+                    let lastName = '';
+                    
+                    if (name && name.trim()) {
+                        const nameParts = name.trim().split(' ').filter(part => part.trim());
+                        if (nameParts.length === 1) {
+                            firstName = nameParts[0];
+                            lastName = '';
+                        } else if (nameParts.length >= 2) {
+                            firstName = nameParts[0];
+                            lastName = nameParts.slice(1).join(' ');
+                        }
+                    } else {
+                        // Generate random name if no name provided
+                        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                        firstName = Array.from({length: 6}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+                        lastName = 'lead';
+                        logs.push(`[${i + 1}] 🔄 Generated random name: ${firstName} ${lastName}`);
+                    }
+                    
+                    // Add contact using saveOrEditAddressbookContact
+                    const contactChatId = await client.saveOrEditAddressbookContact(
+                        normalizedNumber,
+                        firstName,
+                        lastName,
+                        true // syncToAddressbook = true
+                    );
+                    
+                    logs.push(`[${i + 1}] ✅ Contact added successfully: ${firstName} ${lastName}`);
+                    
+                    // Verify the contact was added
+                    try {
+                        const newContact = await client.getContactById(contactChatId._serialized || contactChatId);
+                        if (newContact) {
+                            const hasProperName = newContact.name && 
+                                                newContact.name !== 'undefined' && 
+                                                newContact.name !== undefined && 
+                                                newContact.name !== `Contact ${normalizedNumber}` && 
+                                                newContact.name !== normalizedNumber;
+                            
+                            if (hasProperName) {
+                                logs.push(`[${i + 1}] ✅ Contact verified with proper name: ${newContact.name}`);
+                                results.push({
+                                    index: i,
+                                    success: true,
+                                    message: 'Contact added successfully',
+                                    contact: {
+                                        id: newContact.id,
+                                        name: newContact.name,
+                                        number: newContact.number,
+                                        isMyContact: newContact.isMyContact,
+                                        isWAContact: newContact.isWAContact
+                                    }
+                                });
+                                
+                                // Update lead status
+                                lead.contact_added = true;
+                                lead.last_updated = new Date().toISOString();
+                                
+                            } else {
+                                logs.push(`[${i + 1}] ⚠️ Contact added but name verification failed: ${newContact.name}`);
+                                results.push({
+                                    index: i,
+                                    success: true,
+                                    message: 'Contact added but name verification failed',
+                                    contact: {
+                                        id: newContact.id,
+                                        name: newContact.name,
+                                        number: newContact.number,
+                                        isMyContact: newContact.isMyContact,
+                                        isWAContact: newContact.isWAContact
+                                    },
+                                    needsManualNameUpdate: true
+                                });
+                                
+                                // Update lead status
+                                lead.contact_added = 'error';
+                                lead.last_updated = new Date().toISOString();
+                            }
+                        } else {
+                            logs.push(`[${i + 1}] ⚠️ Contact added but verification failed`);
+                            results.push({
+                                index: i,
+                                success: true,
+                                message: 'Contact added but verification failed',
+                                chatId: contactChatId
+                            });
+                            
+                            // Update lead status
+                            lead.contact_added = 'error';
+                            lead.last_updated = new Date().toISOString();
+                        }
+                    } catch (verifyErr) {
+                        logs.push(`[${i + 1}] ⚠️ Contact added but verification error: ${verifyErr.message}`);
+                        results.push({
+                            index: i,
+                            success: true,
+                            message: 'Contact added but verification failed',
+                            chatId: contactChatId,
+                            verificationError: verifyErr.message
+                        });
+                        
+                        // Update lead status
+                        lead.contact_added = 'error';
+                        lead.last_updated = new Date().toISOString();
+                    }
+                }
+                
+            } catch (err) {
+                logs.push(`[${i + 1}] ❌ Failed to add contact: ${err.message}`);
+                results.push({
+                    index: i,
+                    success: false,
+                    error: err.message,
+                    mobile: mobile
+                });
+                
+                // Update lead status
+                lead.contact_added = 'error';
+                lead.last_updated = new Date().toISOString();
+            }
+        }
+        
+        // Save updated leads data
+        writeJson(LEADS_FILE, leadsData);
+        
+        const successCount = results.filter(r => r.success).length;
+        const errorCount = results.filter(r => !r.success).length;
+        
+        logs.push(`\n📊 Summary: ${successCount} successful, ${errorCount} failed out of ${leadsNeedingContacts.length} total`);
+        
+        res.json({
+            success: true,
+            results: results,
+            logs: logs,
+            summary: {
+                total: leadsNeedingContacts.length,
+                successful: successCount,
+                failed: errorCount
+            }
+        });
+        
+    } catch (err) {
+        console.error('Error processing leads contacts:', err);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to process leads contacts',
+            details: err.message
+        });
+    }
+});
+
 // Add multiple contacts to WhatsApp
 app.post('/api/contacts/add-multiple', async (req, res) => {
     console.log('[CONTACTS] Add multiple contacts endpoint called');

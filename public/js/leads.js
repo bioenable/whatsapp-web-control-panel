@@ -19,6 +19,8 @@
     const leadsAutoChatForm = document.getElementById('leads-auto-chat-form');
     const leadsTestRecordSelect = document.getElementById('leads-test-record-select');
     const leadsTestBtn = document.getElementById('leads-test-btn');
+    const leadsAddContactsBtn = document.getElementById('leads-add-contacts-btn');
+    const leadsAddContactsAlerts = document.getElementById('leads-add-contacts-alerts');
     
     // Leads Tab State Variables
     let leadsData = [];
@@ -71,6 +73,11 @@
             leadsRefreshBtn.addEventListener('click', () => {
                 fetchLeadsFromAPI();
             });
+        }
+
+        // Add Contacts button
+        if (leadsAddContactsBtn) {
+            leadsAddContactsBtn.addEventListener('click', handleAddLeadsContacts);
         }
 
         // Auto chat toggle
@@ -2263,4 +2270,134 @@
             showLeadsStatus(`Error adding contact for ${name}: ${err.message}`, 'error');
         }
     };
+
+    // Handle Add Contacts for Leads
+    async function handleAddLeadsContacts() {
+        if (!leadsAddContactsBtn || !leadsAddContactsAlerts) return;
+        
+        // Disable button and show loading
+        leadsAddContactsBtn.disabled = true;
+        leadsAddContactsBtn.innerHTML = `
+            <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+            <span class="text-sm">Processing...</span>
+        `;
+        
+        // Clear previous alerts
+        leadsAddContactsAlerts.innerHTML = '';
+        
+        try {
+            console.log('[LEADS] Starting contact processing for leads...');
+            
+            const response = await fetch('/api/leads/process-contacts', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Server error response:', errorText);
+                addLeadsAlert('error', `Server error (${response.status}): ${errorText.substring(0, 200)}...`);
+                return;
+            }
+            
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                const responseText = await response.text();
+                console.error('Non-JSON response:', responseText);
+                addLeadsAlert('error', `Server returned non-JSON response: ${responseText.substring(0, 200)}...`);
+                return;
+            }
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Show summary alert
+                const summary = data.summary;
+                addLeadsAlert('success', `✅ Contact processing completed! ${summary.successful} successful, ${summary.failed} failed out of ${summary.total} total leads.`);
+                
+                // Show detailed logs
+                if (data.logs && data.logs.length > 0) {
+                    addLeadsAlert('info', `📋 Processing Logs:\n${data.logs.join('\n')}`);
+                }
+                
+                // Refresh leads list to show updated contact status
+                loadLeadsData();
+                renderLeadsList();
+                
+            } else {
+                addLeadsAlert('error', `❌ Failed to process contacts: ${data.error || 'Unknown error'}`);
+            }
+            
+        } catch (err) {
+            console.error('Error processing leads contacts:', err);
+            addLeadsAlert('error', `❌ Error: ${err.message}`);
+        } finally {
+            // Re-enable button
+            leadsAddContactsBtn.disabled = false;
+            leadsAddContactsBtn.innerHTML = `
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                </svg>
+                <span class="text-sm">Add Contacts</span>
+            `;
+        }
+    }
+    
+    // Add alert to leads alerts container
+    function addLeadsAlert(type, message) {
+        if (!leadsAddContactsAlerts) return;
+        
+        const alertId = 'alert-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        
+        const alertDiv = document.createElement('div');
+        alertDiv.id = alertId;
+        alertDiv.className = `p-4 rounded-lg border-l-4 ${getLeadsAlertClass(type)}`;
+        alertDiv.innerHTML = `
+            <div class="flex justify-between items-start">
+                <div class="flex-1">
+                    <div class="text-sm font-medium ${getLeadsAlertTextClass(type)}">
+                        ${message}
+                    </div>
+                </div>
+                <button onclick="document.getElementById('${alertId}').remove()" class="ml-4 text-gray-400 hover:text-gray-600">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                    </svg>
+                </button>
+            </div>
+        `;
+        
+        leadsAddContactsAlerts.appendChild(alertDiv);
+        
+        // Auto-remove success alerts after 10 seconds
+        if (type === 'success') {
+            setTimeout(() => {
+                const alert = document.getElementById(alertId);
+                if (alert) alert.remove();
+            }, 10000);
+        }
+    }
+    
+    // Get alert styling classes
+    function getLeadsAlertClass(type) {
+        switch (type) {
+            case 'success': return 'bg-green-50 border-green-400';
+            case 'error': return 'bg-red-50 border-red-400';
+            case 'warning': return 'bg-yellow-50 border-yellow-400';
+            case 'info': return 'bg-blue-50 border-blue-400';
+            default: return 'bg-gray-50 border-gray-400';
+        }
+    }
+    
+    function getLeadsAlertTextClass(type) {
+        switch (type) {
+            case 'success': return 'text-green-800';
+            case 'error': return 'text-red-800';
+            case 'warning': return 'text-yellow-800';
+            case 'info': return 'text-blue-800';
+            default: return 'text-gray-800';
+        }
+    }
 })(); 
