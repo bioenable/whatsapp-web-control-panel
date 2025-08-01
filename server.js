@@ -2675,6 +2675,178 @@ app.post('/api/contacts/check', async (req, res) => {
     }
 });
 
+// Add multiple contacts to WhatsApp
+app.post('/api/contacts/add-multiple', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    
+    try {
+        const { contacts } = req.body;
+        if (!contacts || !Array.isArray(contacts) || contacts.length === 0) {
+            return res.status(400).json({ error: 'Contacts array is required' });
+        }
+        
+        if (contacts.length > 1000) {
+            return res.status(400).json({ error: 'Maximum 1000 contacts allowed per request' });
+        }
+        
+        const results = [];
+        const logs = [];
+        
+        for (let i = 0; i < contacts.length; i++) {
+            const contact = contacts[i];
+            const { number, firstName, lastName, originalName } = contact;
+            
+            if (!number) {
+                results.push({ 
+                    index: i, 
+                    success: false, 
+                    error: 'Missing phone number',
+                    number: number || 'unknown'
+                });
+                logs.push(`[${i + 1}] ❌ Missing phone number`);
+                continue;
+            }
+            
+            try {
+                // Normalize phone number
+                const normalizedNumber = number.replace(/[^0-9]/g, '');
+                const chatId = normalizedNumber + '@c.us';
+                
+                logs.push(`[${i + 1}] 📞 Processing: ${number} (${originalName || firstName + ' ' + lastName})`);
+                
+                // Check if contact already exists
+                let contactExists = false;
+                try {
+                    const existingContact = await client.getContactById(chatId);
+                    if (existingContact && existingContact.isMyContact) {
+                        logs.push(`[${i + 1}] ✅ Contact already exists: ${existingContact.name}`);
+                        results.push({
+                            index: i,
+                            success: true,
+                            message: 'Contact already exists',
+                            contact: {
+                                id: existingContact.id,
+                                name: existingContact.name,
+                                number: existingContact.number,
+                                isMyContact: existingContact.isMyContact,
+                                isWAContact: existingContact.isWAContact
+                            }
+                        });
+                        contactExists = true;
+                    }
+                } catch (err) {
+                    logs.push(`[${i + 1}] ℹ️ Contact check failed, will add: ${err.message}`);
+                }
+                
+                if (!contactExists) {
+                    // Add contact using saveOrEditAddressbookContact
+                    const contactChatId = await client.saveOrEditAddressbookContact(
+                        normalizedNumber,
+                        firstName || '',
+                        lastName || '',
+                        true // syncToAddressbook = true
+                    );
+                    
+                    logs.push(`[${i + 1}] ✅ Contact added successfully: ${firstName} ${lastName}`);
+                    
+                    // Verify the contact was added
+                    try {
+                        const newContact = await client.getContactById(contactChatId._serialized || contactChatId);
+                        if (newContact) {
+                            const hasProperName = newContact.name && 
+                                                newContact.name !== 'undefined' && 
+                                                newContact.name !== undefined && 
+                                                newContact.name !== `Contact ${normalizedNumber}` && 
+                                                newContact.name !== normalizedNumber;
+                            
+                            if (hasProperName) {
+                                logs.push(`[${i + 1}] ✅ Contact verified with proper name: ${newContact.name}`);
+                                results.push({
+                                    index: i,
+                                    success: true,
+                                    message: 'Contact added successfully',
+                                    contact: {
+                                        id: newContact.id,
+                                        name: newContact.name,
+                                        number: newContact.number,
+                                        isMyContact: newContact.isMyContact,
+                                        isWAContact: newContact.isWAContact
+                                    }
+                                });
+                            } else {
+                                logs.push(`[${i + 1}] ⚠️ Contact added but name verification failed: ${newContact.name}`);
+                                results.push({
+                                    index: i,
+                                    success: true,
+                                    message: 'Contact added but name verification failed',
+                                    contact: {
+                                        id: newContact.id,
+                                        name: newContact.name,
+                                        number: newContact.number,
+                                        isMyContact: newContact.isMyContact,
+                                        isWAContact: newContact.isWAContact
+                                    },
+                                    needsManualNameUpdate: true
+                                });
+                            }
+                        } else {
+                            logs.push(`[${i + 1}] ⚠️ Contact added but verification failed`);
+                            results.push({
+                                index: i,
+                                success: true,
+                                message: 'Contact added but verification failed',
+                                chatId: contactChatId
+                            });
+                        }
+                    } catch (verifyErr) {
+                        logs.push(`[${i + 1}] ⚠️ Contact added but verification error: ${verifyErr.message}`);
+                        results.push({
+                            index: i,
+                            success: true,
+                            message: 'Contact added but verification failed',
+                            chatId: contactChatId,
+                            verificationError: verifyErr.message
+                        });
+                    }
+                }
+                
+            } catch (err) {
+                logs.push(`[${i + 1}] ❌ Failed to add contact: ${err.message}`);
+                results.push({
+                    index: i,
+                    success: false,
+                    error: err.message,
+                    number: number
+                });
+            }
+        }
+        
+        const successCount = results.filter(r => r.success).length;
+        const errorCount = results.filter(r => !r.success).length;
+        
+        logs.push(`\n📊 Summary: ${successCount} successful, ${errorCount} failed`);
+        
+        res.json({
+            success: true,
+            results: results,
+            logs: logs,
+            summary: {
+                total: contacts.length,
+                successful: successCount,
+                failed: errorCount
+            }
+        });
+        
+    } catch (err) {
+        console.error('Error adding multiple contacts:', err);
+        res.status(500).json({
+            success: false,
+            error: 'Failed to add contacts',
+            details: err.message
+        });
+    }
+});
+
 // Add contact to WhatsApp
 app.post('/api/contacts/add', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });

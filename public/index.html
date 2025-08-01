@@ -435,7 +435,58 @@
                                             <div class="flex justify-between items-center mb-4">
                             <h2 class="text-xl font-semibold">Contacts Management</h2>
                             <div class="flex items-center gap-2">
+                                <button id="add-contacts-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Add Contacts</button>
                                 <button id="copy-contacts-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Copy Numbers</button>
+                            </div>
+                        </div>
+                        
+                        <!-- Add Contacts Form -->
+                        <div id="add-contacts-form" class="mb-6 bg-white rounded shadow p-4 hidden">
+                            <div class="flex justify-between items-center mb-4">
+                                <h3 class="text-lg font-semibold">Add Multiple Contacts</h3>
+                                <button id="close-add-contacts-btn" class="text-gray-500 hover:text-gray-700">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <label class="block text-sm font-medium mb-2">Contact List (up to 1000 contacts)</label>
+                                <textarea id="contacts-input" class="w-full border rounded px-3 py-2 resize-none" rows="10" 
+                                    placeholder="Enter contacts in one of these formats:
+
+Format 1 (number, name):
++1234567890, John Doe
++9876543210, Jane Smith
++5551234567, Bob Johnson
+
+Format 2 (number, firstname, lastname):
++1234567890, John, Doe
++9876543210, Jane, Smith
++5551234567, Bob, Johnson
+
+One contact per line. Names will be automatically split if using Format 1."></textarea>
+                                <div class="text-sm text-gray-600 mt-1">
+                                    <span id="contacts-count-display">0 contacts detected</span>
+                                </div>
+                            </div>
+                            
+                            <div class="mb-4">
+                                <button id="add-contacts-submit-btn" class="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 flex items-center gap-2">
+                                    <span id="add-contacts-btn-text">Add Contacts</span>
+                                    <div id="add-contacts-loading" class="hidden">
+                                        <div class="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                                    </div>
+                                </button>
+                            </div>
+                            
+                            <!-- Results Section -->
+                            <div id="add-contacts-results" class="hidden">
+                                <h4 class="text-md font-semibold mb-2">Results:</h4>
+                                <div id="add-contacts-logs" class="bg-gray-50 rounded p-3 max-h-60 overflow-y-auto text-sm font-mono">
+                                    <!-- Logs will be displayed here -->
+                                </div>
                             </div>
                         </div>
                     

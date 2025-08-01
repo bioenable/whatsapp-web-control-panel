@@ -20,6 +20,18 @@
     const contactsPrevPage = document.getElementById('contacts-prev-page');
     const contactsNextPage = document.getElementById('contacts-next-page');
     const contactsPageInfo = document.getElementById('contacts-page-info');
+    
+    // Add Contacts Form Elements
+    const addContactsBtn = document.getElementById('add-contacts-btn');
+    const addContactsForm = document.getElementById('add-contacts-form');
+    const closeAddContactsBtn = document.getElementById('close-add-contacts-btn');
+    const contactsInput = document.getElementById('contacts-input');
+    const contactsCountDisplay = document.getElementById('contacts-count-display');
+    const addContactsSubmitBtn = document.getElementById('add-contacts-submit-btn');
+    const addContactsBtnText = document.getElementById('add-contacts-btn-text');
+    const addContactsLoading = document.getElementById('add-contacts-loading');
+    const addContactsResults = document.getElementById('add-contacts-results');
+    const addContactsLogs = document.getElementById('add-contacts-logs');
 
     // Contacts Tab State Variables
     let allContacts = [];
@@ -56,6 +68,22 @@
 
         if (copyContactsBtn) {
             copyContactsBtn.addEventListener('click', copyContactNumbers);
+        }
+
+        if (addContactsBtn) {
+            addContactsBtn.addEventListener('click', showAddContactsForm);
+        }
+
+        if (closeAddContactsBtn) {
+            closeAddContactsBtn.addEventListener('click', hideAddContactsForm);
+        }
+
+        if (contactsInput) {
+            contactsInput.addEventListener('input', updateContactsCount);
+        }
+
+        if (addContactsSubmitBtn) {
+            addContactsSubmitBtn.addEventListener('click', handleAddContactsSubmit);
         }
 
         if (contactsSearchBtn) {
@@ -417,12 +445,176 @@
     
 
 
+    // Add Contacts Form Functions
+    function showAddContactsForm() {
+        if (addContactsForm) {
+            addContactsForm.classList.remove('hidden');
+            if (contactsInput) {
+                contactsInput.focus();
+            }
+        }
+    }
+
+    function hideAddContactsForm() {
+        if (addContactsForm) {
+            addContactsForm.classList.add('hidden');
+            if (contactsInput) {
+                contactsInput.value = '';
+            }
+            if (addContactsResults) {
+                addContactsResults.classList.add('hidden');
+            }
+            if (contactsCountDisplay) {
+                contactsCountDisplay.textContent = '0 contacts detected';
+            }
+        }
+    }
+
+    function updateContactsCount() {
+        if (!contactsInput || !contactsCountDisplay) return;
+        
+        const text = contactsInput.value.trim();
+        if (!text) {
+            contactsCountDisplay.textContent = '0 contacts detected';
+            return;
+        }
+        
+        const contacts = parseContactsFromText(text);
+        
+        contactsCountDisplay.textContent = `${contacts.length} contacts detected`;
+        
+        if (contacts.length > 1000) {
+            contactsCountDisplay.textContent += ' (max 1000 allowed)';
+            contactsCountDisplay.classList.add('text-red-600');
+        } else {
+            contactsCountDisplay.classList.remove('text-red-600');
+        }
+    }
+
+    function parseContactsFromText(text) {
+        const lines = text.split('\n').filter(line => line.trim());
+        const contacts = [];
+        
+        for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            
+            // Split by comma and clean up
+            const parts = trimmedLine.split(',').map(part => part.trim()).filter(part => part);
+            
+            if (parts.length < 2) continue; // Need at least number and name
+            
+            const number = parts[0];
+            const nameParts = parts.slice(1);
+            
+            if (nameParts.length === 1) {
+                // Format 1: number, fullname
+                const fullName = nameParts[0];
+                const nameSplit = fullName.split(' ').filter(part => part.trim());
+                
+                if (nameSplit.length === 1) {
+                    // Single word name
+                    contacts.push({
+                        number: number,
+                        firstName: nameSplit[0],
+                        lastName: '',
+                        originalName: fullName
+                    });
+                } else {
+                    // Multiple word name - first word as firstName, rest as lastName
+                    contacts.push({
+                        number: number,
+                        firstName: nameSplit[0],
+                        lastName: nameSplit.slice(1).join(' '),
+                        originalName: fullName
+                    });
+                }
+            } else {
+                // Format 2: number, firstname, lastname
+                contacts.push({
+                    number: number,
+                    firstName: nameParts[0],
+                    lastName: nameParts.slice(1).join(' '),
+                    originalName: nameParts.join(' ')
+                });
+            }
+        }
+        
+        return contacts;
+    }
+
+    async function handleAddContactsSubmit() {
+        if (!contactsInput || !addContactsSubmitBtn || !addContactsLogs) return;
+        
+        const text = contactsInput.value.trim();
+        if (!text) {
+            alert('Please enter contacts to add.');
+            return;
+        }
+        
+        const contacts = parseContactsFromText(text);
+        if (contacts.length === 0) {
+            alert('No valid contacts found. Please check the format.');
+            return;
+        }
+        
+        if (contacts.length > 1000) {
+            alert('Maximum 1000 contacts allowed per request.');
+            return;
+        }
+        
+        // Show loading state
+        addContactsSubmitBtn.disabled = true;
+        addContactsBtnText.textContent = 'Adding Contacts...';
+        addContactsLoading.classList.remove('hidden');
+        addContactsResults.classList.remove('hidden');
+        addContactsLogs.innerHTML = 'Processing contacts...\n';
+        
+        try {
+            const response = await fetch('/api/contacts/add-multiple', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ contacts })
+            });
+            
+            const data = await response.json();
+            
+            if (data.success) {
+                // Display logs
+                addContactsLogs.innerHTML = data.logs.join('\n');
+                
+                // Show summary
+                const summary = data.summary;
+                const summaryText = `\n📊 Summary: ${summary.successful} successful, ${summary.failed} failed out of ${summary.total} total`;
+                addContactsLogs.innerHTML += summaryText;
+                
+                // Refresh contacts list
+                loadContacts();
+                
+            } else {
+                addContactsLogs.innerHTML = `❌ Error: ${data.error}`;
+            }
+            
+        } catch (err) {
+            addContactsLogs.innerHTML = `❌ Failed to add contacts: ${err.message}`;
+        } finally {
+            // Reset loading state
+            addContactsSubmitBtn.disabled = false;
+            addContactsBtnText.textContent = 'Add Contacts';
+            addContactsLoading.classList.add('hidden');
+        }
+    }
+
     // Expose functions to global scope
     window.ContactsTab = {
         init: initContactsTab,
         loadContacts,
-        updateContacts,
-        filterContacts
+        performSearch,
+        clearSearch,
+        showAddContactsForm,
+        hideAddContactsForm
     };
 
 })(); 
