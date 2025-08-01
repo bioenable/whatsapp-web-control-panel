@@ -2675,6 +2675,11 @@ app.post('/api/contacts/check', async (req, res) => {
     }
 });
 
+// Test endpoint for debugging
+app.get('/api/contacts/test', (req, res) => {
+    res.json({ success: true, message: 'Contacts API is working' });
+});
+
 // Add multiple contacts to WhatsApp
 app.post('/api/contacts/add-multiple', async (req, res) => {
     console.log('[CONTACTS] Add multiple contacts endpoint called');
@@ -2846,15 +2851,21 @@ app.post('/api/contacts/add-multiple', async (req, res) => {
             }
         });
         
-    } catch (err) {
-        console.error('Error adding multiple contacts:', err);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to add contacts',
-            details: err.message
-        });
-    }
-});
+            } catch (err) {
+            console.error('Error adding multiple contacts:', err);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to add contacts',
+                details: err.message
+            });
+        }
+    });
+    
+    // Error handler for unhandled routes
+    app.use('/api/contacts/*', (req, res) => {
+        console.log('[CONTACTS] Unhandled route:', req.method, req.path);
+        res.status(404).json({ error: 'Contact endpoint not found' });
+    });
 
 // Add contact to WhatsApp
 app.post('/api/contacts/add', async (req, res) => {
