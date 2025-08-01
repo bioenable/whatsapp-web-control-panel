@@ -2688,8 +2688,8 @@ app.post('/api/leads/process-contacts', async (req, res) => {
         console.log('[LEADS] Processing contacts for leads...');
         
         // Read leads data
-        const leadsData = readJson(LEADS_FILE);
-        const leadsNeedingContacts = leadsData.filter(lead => 
+        const leadsData = readJson(LEADS_FILE, { leads: [] });
+        const leadsNeedingContacts = leadsData.leads.filter(lead => 
             lead.contact_added !== true && 
             lead.contact_added !== 'error' &&
             lead.mobile
@@ -2713,6 +2713,13 @@ app.post('/api/leads/process-contacts', async (req, res) => {
         for (let i = 0; i < leadsNeedingContacts.length; i++) {
             const lead = leadsNeedingContacts[i];
             const { mobile, name } = lead;
+            
+            // Find the original lead in the full leads data
+            const originalLeadIndex = leadsData.leads.findIndex(l => l.mobile === mobile);
+            if (originalLeadIndex === -1) {
+                logs.push(`[${i + 1}] ⚠️ Lead not found in original data: ${mobile}`);
+                continue;
+            }
             
             logs.push(`[${i + 1}] 📞 Processing: ${mobile} (${name})`);
             
@@ -2816,8 +2823,8 @@ app.post('/api/leads/process-contacts', async (req, res) => {
                                 });
                                 
                                 // Update lead status
-                                lead.contact_added = true;
-                                lead.last_updated = new Date().toISOString();
+                                leadsData.leads[originalLeadIndex].contact_added = true;
+                                leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
                                 
                             } else {
                                 logs.push(`[${i + 1}] ⚠️ Contact added but name verification failed: ${newContact.name}`);
@@ -2836,8 +2843,8 @@ app.post('/api/leads/process-contacts', async (req, res) => {
                                 });
                                 
                                 // Update lead status
-                                lead.contact_added = 'error';
-                                lead.last_updated = new Date().toISOString();
+                                leadsData.leads[originalLeadIndex].contact_added = 'error';
+                                leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
                             }
                         } else {
                             logs.push(`[${i + 1}] ⚠️ Contact added but verification failed`);
@@ -2849,8 +2856,8 @@ app.post('/api/leads/process-contacts', async (req, res) => {
                             });
                             
                             // Update lead status
-                            lead.contact_added = 'error';
-                            lead.last_updated = new Date().toISOString();
+                            leadsData.leads[originalLeadIndex].contact_added = 'error';
+                            leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
                         }
                     } catch (verifyErr) {
                         logs.push(`[${i + 1}] ⚠️ Contact added but verification error: ${verifyErr.message}`);
@@ -2863,8 +2870,8 @@ app.post('/api/leads/process-contacts', async (req, res) => {
                         });
                         
                         // Update lead status
-                        lead.contact_added = 'error';
-                        lead.last_updated = new Date().toISOString();
+                        leadsData.leads[originalLeadIndex].contact_added = 'error';
+                        leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
                     }
                 }
                 
@@ -2878,8 +2885,8 @@ app.post('/api/leads/process-contacts', async (req, res) => {
                 });
                 
                 // Update lead status
-                lead.contact_added = 'error';
-                lead.last_updated = new Date().toISOString();
+                leadsData.leads[originalLeadIndex].contact_added = 'error';
+                leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
             }
         }
         
