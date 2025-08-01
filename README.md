@@ -44,12 +44,15 @@ The library works by launching the WhatsApp Web browser application and managing
 
 ## Recent Updates
 
-### v1.32.0 - Enhanced Auto-Reply System
-- ✅ **Individual Lead Auto-Reply**: Auto-reply functionality for leads with auto chat enabled
-- ✅ **Enhanced Logging**: Full prompt and response logging for better debugging
-- ✅ **Context-Aware Responses**: AI responses include lead data, chat history, and system prompts
-- ✅ **Robust Mobile Matching**: Improved mobile number matching for different formats
-- ✅ **Comprehensive Error Handling**: Better error handling and logging for auto-reply failures
+### v1.32.0 - Enhanced Contact Management & Bulk Messaging
+- ✅ **Leads Tab Contact Processing**: New "Add Contacts" button for processing failed leads
+- ✅ **Bulk Tab Contact Integration**: Automatic contact checking and addition before sending messages
+- ✅ **Robust Contact Verification**: Enhanced contact addition with proper name verification
+- ✅ **Random Name Generation**: Auto-generate names for contacts without names (firstName: random 6-char, lastName: "bulk")
+- ✅ **Enhanced Error Handling**: Fail-safe contact addition with clear error messages
+- ✅ **Real-time Progress Alerts**: Inline alerts with progress updates and closable UI components
+- ✅ **Contact Status Tracking**: Persistent contact status in leads.json with proper error handling
+- ✅ **Server Startup Fix**: Fixed route parsing error that prevented server startup
 
 ### v1.31.0 - Leads Management System
 - ✅ **Complete Leads Management**: Full CRUD operations for leads

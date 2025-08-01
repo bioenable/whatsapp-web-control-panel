@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-web-control",
-  "version": "1.0.0",
+  "version": "1.32.0",
   "description": "WhatsApp Web Control Server with automation and leads management",
   "main": "server.js",
   "scripts": {
