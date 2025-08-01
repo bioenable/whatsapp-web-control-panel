@@ -669,11 +669,24 @@ setInterval(async () => {
             
             // Check if contact exists and add if needed
             let contactExists = false;
+            let existingContact = null;
+            
             try {
-                const contact = await client.getContactById(chatId);
-                if (contact && contact.isMyContact) {
-                    console.log(`[BULK] Contact exists for ${normalizedNumber}: ${contact.name}`);
-                    contactExists = true;
+                existingContact = await client.getContactById(chatId);
+                if (existingContact && existingContact.isMyContact) {
+                    // Check if contact has proper name
+                    const hasProperName = existingContact.name && 
+                                        existingContact.name !== 'undefined' && 
+                                        existingContact.name !== undefined && 
+                                        existingContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
+                                        existingContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
+                    
+                    if (hasProperName) {
+                        console.log(`[BULK] Contact exists with proper name for ${normalizedNumber}: ${existingContact.name}`);
+                        contactExists = true;
+                    } else {
+                        console.log(`[BULK] Contact exists but needs name update for ${normalizedNumber}: ${existingContact.name} -> ${r.name || 'generated name'}`);
+                    }
                 } else {
                     console.log(`[BULK] Contact does not exist for ${normalizedNumber}, adding...`);
                 }
@@ -681,7 +694,7 @@ setInterval(async () => {
                 console.log(`[BULK] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
             }
             
-            // Add contact if it doesn't exist
+            // Add contact if it doesn't exist or needs name update
             if (!contactExists) {
                 try {
                     // Generate name if not available
@@ -715,12 +728,42 @@ setInterval(async () => {
                     
                     console.log(`[BULK] Contact added successfully for ${normalizedNumber}: ${firstName} ${lastName}`);
                     
-                    // Use the returned chatId for sending message
-                    chatId = contactChatId._serialized || contactChatId;
+                    // Verify the contact was added
+                    try {
+                        const newContact = await client.getContactById(contactChatId._serialized || contactChatId);
+                        if (newContact) {
+                            const hasProperName = newContact.name && 
+                                                newContact.name !== 'undefined' && 
+                                                newContact.name !== undefined && 
+                                                newContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
+                                                newContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
+                            
+                            if (hasProperName) {
+                                console.log(`[BULK] Contact verified with proper name: ${newContact.name}`);
+                                // Use the returned chatId for sending message
+                                chatId = contactChatId._serialized || contactChatId;
+                            } else {
+                                console.log(`[BULK] Contact added but name verification failed: ${newContact.name}`);
+                                throw new Error('Failed to add contact with proper name');
+                            }
+                        } else {
+                            console.log(`[BULK] Contact added but verification failed`);
+                            throw new Error('Contact verification failed');
+                        }
+                    } catch (verifyErr) {
+                        console.error(`[BULK] Contact verification error for ${normalizedNumber}:`, verifyErr.message);
+                        throw new Error(`Failed to verify contact: ${verifyErr.message}`);
+                    }
                     
                 } catch (addErr) {
                     console.error(`[BULK] Failed to add contact for ${normalizedNumber}:`, addErr.message);
-                    // Continue with original chatId if contact addition fails
+                    // Mark as failed and skip sending message
+                    records[i].status = 'failed';
+                    records[i].sent_datetime = new Date().toISOString();
+                    records[i].error = `Failed to add number to contacts before sending bulk message: ${addErr.message}`;
+                    changed = true;
+                    writeJson(BULK_FILE, records);
+                    continue; // Skip to next message
                 }
             }
             
@@ -2093,7 +2136,108 @@ app.post('/api/bulk-retry/:filename', async (req, res) => {
         
         for (const message of failedMessages) {
             try {
-                const chatId = message.to + '@c.us';
+                const normalizedNumber = message.to.trim();
+                let chatId = !normalizedNumber.endsWith('@c.us') && !normalizedNumber.endsWith('@g.us')
+                    ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
+                    : normalizedNumber;
+                
+                // Check if contact exists and add if needed
+                let contactExists = false;
+                let existingContact = null;
+                
+                try {
+                    existingContact = await client.getContactById(chatId);
+                    if (existingContact && existingContact.isMyContact) {
+                        // Check if contact has proper name
+                        const hasProperName = existingContact.name && 
+                                            existingContact.name !== 'undefined' && 
+                                            existingContact.name !== undefined && 
+                                            existingContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
+                                            existingContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
+                        
+                        if (hasProperName) {
+                            console.log(`[BULK RETRY] Contact exists with proper name for ${normalizedNumber}: ${existingContact.name}`);
+                            contactExists = true;
+                        } else {
+                            console.log(`[BULK RETRY] Contact exists but needs name update for ${normalizedNumber}: ${existingContact.name}`);
+                        }
+                    } else {
+                        console.log(`[BULK RETRY] Contact does not exist for ${normalizedNumber}, adding...`);
+                    }
+                } catch (err) {
+                    console.log(`[BULK RETRY] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
+                }
+                
+                // Add contact if it doesn't exist or needs name update
+                if (!contactExists) {
+                    try {
+                        // Generate name if not available
+                        let firstName = '';
+                        let lastName = '';
+                        
+                        if (message.name && message.name.trim()) {
+                            const nameParts = message.name.trim().split(' ').filter(part => part.length > 0);
+                            if (nameParts.length === 1) {
+                                firstName = nameParts[0];
+                                lastName = '';
+                            } else if (nameParts.length >= 2) {
+                                firstName = nameParts[0];
+                                lastName = nameParts.slice(1).join(' ');
+                            }
+                        } else {
+                            // Generate random 6-character alphanumeric string as firstName
+                            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                            firstName = Array.from({length: 6}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
+                            lastName = 'bulk';
+                            console.log(`[BULK RETRY] Generated random name for ${normalizedNumber}: ${firstName} ${lastName}`);
+                        }
+                        
+                        // Add contact using saveOrEditAddressbookContact
+                        const contactChatId = await client.saveOrEditAddressbookContact(
+                            normalizedNumber.replace(/[^0-9]/g, ''),
+                            firstName,
+                            lastName,
+                            true // syncToAddressbook = true
+                        );
+                        
+                        console.log(`[BULK RETRY] Contact added successfully for ${normalizedNumber}: ${firstName} ${lastName}`);
+                        
+                        // Verify the contact was added
+                        try {
+                            const newContact = await client.getContactById(contactChatId._serialized || contactChatId);
+                            if (newContact) {
+                                const hasProperName = newContact.name && 
+                                                    newContact.name !== 'undefined' && 
+                                                    newContact.name !== undefined && 
+                                                    newContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
+                                                    newContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
+                                
+                                if (hasProperName) {
+                                    console.log(`[BULK RETRY] Contact verified with proper name: ${newContact.name}`);
+                                    // Use the returned chatId for sending message
+                                    chatId = contactChatId._serialized || contactChatId;
+                                } else {
+                                    console.log(`[BULK RETRY] Contact added but name verification failed: ${newContact.name}`);
+                                    throw new Error('Failed to add contact with proper name');
+                                }
+                            } else {
+                                console.log(`[BULK RETRY] Contact added but verification failed`);
+                                throw new Error('Contact verification failed');
+                            }
+                        } catch (verifyErr) {
+                            console.error(`[BULK RETRY] Contact verification error for ${normalizedNumber}:`, verifyErr.message);
+                            throw new Error(`Failed to verify contact: ${verifyErr.message}`);
+                        }
+                        
+                    } catch (addErr) {
+                        console.error(`[BULK RETRY] Failed to add contact for ${normalizedNumber}:`, addErr.message);
+                        message.status = 'failed';
+                        message.error = `Failed to add number to contacts before sending bulk message: ${addErr.message}`;
+                        failCount++;
+                        continue; // Skip to next message
+                    }
+                }
+                
                 let media = null;
                 
                 if (message.media) {
