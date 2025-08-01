@@ -2860,12 +2860,6 @@ app.post('/api/contacts/add-multiple', async (req, res) => {
             });
         }
     });
-    
-    // Error handler for unhandled routes
-    app.use('/api/contacts/*', (req, res) => {
-        console.log('[CONTACTS] Unhandled route:', req.method, req.path);
-        res.status(404).json({ error: 'Contact endpoint not found' });
-    });
 
 // Add contact to WhatsApp
 app.post('/api/contacts/add', async (req, res) => {
