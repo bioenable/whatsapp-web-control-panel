@@ -579,6 +579,23 @@
                 body: JSON.stringify({ contacts })
             });
             
+            // Check if response is ok
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Server error response:', errorText);
+                addContactsLogs.innerHTML = `❌ Server error (${response.status}): ${errorText}`;
+                return;
+            }
+            
+            // Check content type
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                const responseText = await response.text();
+                console.error('Non-JSON response:', responseText);
+                addContactsLogs.innerHTML = `❌ Server returned non-JSON response: ${responseText.substring(0, 200)}...`;
+                return;
+            }
+            
             const data = await response.json();
             
             if (data.success) {
@@ -598,6 +615,7 @@
             }
             
         } catch (err) {
+            console.error('Fetch error:', err);
             addContactsLogs.innerHTML = `❌ Failed to add contacts: ${err.message}`;
         } finally {
             // Reset loading state

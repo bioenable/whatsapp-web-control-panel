@@ -2677,11 +2677,20 @@ app.post('/api/contacts/check', async (req, res) => {
 
 // Add multiple contacts to WhatsApp
 app.post('/api/contacts/add-multiple', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    console.log('[CONTACTS] Add multiple contacts endpoint called');
+    console.log('[CONTACTS] Request body:', req.body);
+    
+    if (!ready) {
+        console.log('[CONTACTS] WhatsApp not ready');
+        return res.status(503).json({ error: 'WhatsApp not ready' });
+    }
     
     try {
         const { contacts } = req.body;
+        console.log('[CONTACTS] Contacts received:', contacts);
+        
         if (!contacts || !Array.isArray(contacts) || contacts.length === 0) {
+            console.log('[CONTACTS] Invalid contacts data');
             return res.status(400).json({ error: 'Contacts array is required' });
         }
         
