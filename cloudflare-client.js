@@ -136,13 +136,13 @@ class CloudflareClient {
   }
 
   // Queue a message for sending
-  async queueMessage(to, message, media, priority, userId = null, userInfo = null, contactName = null) {
+  async queueMessage(to, message, media, priority, from = null, contactName = null) {
     if (!this.isConnected) return null;
     
     try {
       const result = await this.makeRequest('/api/messages/queue', {
         method: 'POST',
-        body: { to, message, media, priority, userId, userInfo, contactName }
+        body: { to, message, media, priority, from, contactName }
       });
       return result;
     } catch (error) {
@@ -152,11 +152,11 @@ class CloudflareClient {
   }
 
   // Get queued messages (with optional user filtering)
-  async getQueuedMessages(userId = null) {
+  async getQueuedMessages(from = null) {
     if (!this.isConnected) return [];
     
     try {
-      const endpoint = userId ? `/api/messages/queue?userId=${encodeURIComponent(userId)}` : '/api/messages/queue';
+      const endpoint = from ? `/api/messages/queue?from=${encodeURIComponent(from)}` : '/api/messages/queue';
       const result = await this.makeRequest(endpoint);
       return result.data || [];
     } catch (error) {
@@ -166,13 +166,13 @@ class CloudflareClient {
   }
 
   // Mark messages as processed (with optional user filtering)
-  async processMessages(processedMessages, userId = null) {
+  async processMessages(processedMessages, from = null) {
     if (!this.isConnected) return false;
     
     try {
       const result = await this.makeRequest('/api/messages/queue/process', {
         method: 'POST',
-        body: { processedMessages, userId }
+        body: { processedMessages, from }
       });
       
       console.log(`[CLOUDFLARE] Processed ${result.processed} messages`);

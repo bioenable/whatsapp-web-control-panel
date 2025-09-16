@@ -581,7 +581,21 @@ async function processQueuedMessages() {
 
     for (const queuedMsg of queuedMessages) {
       try {
-        console.log(`[CLOUDFLARE] Processing queued message: ${queuedMsg.id} for user: ${userInfo.name}`);
+        console.log(`[CLOUDFLARE] Processing queued message: ${queuedMsg.id} for user: ${userInfo.id}`);
+        
+        // SECURITY VALIDATION: Check if the from field matches the logged-in user
+        if (queuedMsg.from && queuedMsg.from !== userInfo.id) {
+          console.log(`[CLOUDFLARE] SECURITY REJECTION: Message ${queuedMsg.id} from ${queuedMsg.from} does not match logged-in user ${userInfo.id}`);
+          
+          // Mark message as rejected
+          processedMessages.push({
+            id: queuedMsg.id,
+            status: 'rejected',
+            rejectedAt: new Date().toISOString(),
+            error: 'Security validation failed: from field does not match logged-in user'
+          });
+          continue; // Skip processing this message
+        }
         
         // Check and create contact if needed
         const chatId = queuedMsg.to;
@@ -620,7 +634,7 @@ async function processQueuedMessages() {
 
     if (processedMessages.length > 0) {
       await cloudflareClient.processMessages(processedMessages, userInfo.id);
-      console.log(`[CLOUDFLARE] Processed ${processedMessages.length} queued messages for user: ${userInfo.name}`);
+        console.log(`[CLOUDFLARE] Processed ${processedMessages.length} queued messages for user: ${userInfo.id}`);
     }
   } catch (error) {
     console.error('[CLOUDFLARE] Queue processing error:', error);
@@ -896,7 +910,28 @@ const csvUpload = multer({
 
 // Initialize Express app
 const app = express();
-const PORT = 5014;
+const PORT = process.env.PORT || 5014;
+
+// Function to check and kill process on port
+async function checkAndKillPort(port) {
+  try {
+    const { exec } = require('child_process');
+    const util = require('util');
+    const execAsync = util.promisify(exec);
+    
+    const { stdout } = await execAsync(`lsof -t -i:${port}`);
+    if (stdout.trim()) {
+      console.log(`[PORT] Process found on port ${port}, killing it...`);
+      await execAsync(`kill -9 ${stdout.trim()}`);
+      console.log(`[PORT] Process killed successfully`);
+      // Wait a moment for the port to be released
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  } catch (error) {
+    // Port is free or no process found
+    console.log(`[PORT] Port ${port} is available`);
+  }
+}
 
 // Middleware
 app.use(cors());
@@ -964,15 +999,11 @@ function getUserIdentifier() {
         return null;
     }
     
-    // Use WhatsApp ID as unique identifier
+    // Use WhatsApp ID as unique identifier - simplified to only essential field
     const userId = currentUserInfo.wid._serialized || currentUserInfo.wid;
-    const userName = currentUserInfo.pushname || 'Unknown User';
     
     return {
-        id: userId,
-        name: userName,
-        phone: userId.replace('@c.us', ''),
-        platform: currentUserInfo.platform || 'web'
+        id: userId
     };
 }
 
@@ -990,9 +1021,16 @@ const client = new Client({
             '--no-zygote',
             '--disable-gpu',
             '--disable-web-security',
-            '--disable-features=VizDisplayCompositor'
+            '--disable-features=VizDisplayCompositor',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-extensions',
+            '--disable-plugins',
+            '--disable-images',
+            '--disable-javascript',
+            '--disable-default-apps'
         ],
-        timeout: 60000 // Increase timeout
+        timeout: 120000, // Increase timeout to 2 minutes
+        defaultViewport: { width: 1280, height: 720 }
     },
     webVersionCache: {
         type: 'remote',
@@ -1024,9 +1062,10 @@ client.on('ready', async () => {
     currentUserInfo = client.info;
     const userInfo = getUserIdentifier();
     if (userInfo) {
-        console.log(`[USER] Logged in as: ${userInfo.name} (${userInfo.phone})`);
+        const phoneNumber = userInfo.id.replace('@c.us', '');
+        const userName = currentUserInfo.pushname || 'Unknown User';
+        console.log(`[USER] Logged in as: ${userName} (${phoneNumber})`);
         console.log(`[USER] User ID: ${userInfo.id}`);
-        console.log(`[USER] Platform: ${userInfo.platform}`);
     } else {
         console.log('[USER] Warning: Could not detect user information');
     }
@@ -3354,10 +3393,46 @@ process.on('SIGTERM', async () => {
     process.exit(0);
 });
 
-// Start the Express server
-app.listen(PORT, () => {
-  console.log(`WhatsApp Web Control Server running at http://localhost:${PORT}`);
+// Check and clean up port before starting
+async function startServer() {
+  await checkAndKillPort(PORT);
+  
+  // Start the Express server with error handling
+  const server = app.listen(PORT, () => {
+    console.log(`WhatsApp Web Control Server running at http://localhost:${PORT}`);
+    console.log(`Web Interface: http://localhost:${PORT}`);
+    console.log(`API Status: http://localhost:${PORT}/api/status`);
+  }).on('error', (err) => {
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[ERROR] Port ${PORT} is already in use. Please kill the process using this port or use a different port.`);
+    console.error(`[ERROR] To kill the process: kill -9 $(lsof -t -i:${PORT})`);
+    process.exit(1);
+  } else {
+    console.error(`[ERROR] Failed to start server:`, err.message);
+    process.exit(1);
+  }
+  });
+  
+  // Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('[SHUTDOWN] Received SIGTERM, shutting down gracefully...');
+  server.close(() => {
+    console.log('[SHUTDOWN] Server closed');
+    process.exit(0);
+  });
 });
+
+process.on('SIGINT', () => {
+  console.log('[SHUTDOWN] Received SIGINT, shutting down gracefully...');
+  server.close(() => {
+    console.log('[SHUTDOWN] Server closed');
+    process.exit(0);
+  });
+});
+}
+
+// Start the server
+startServer().catch(console.error);
 
 // Get all detected channels (from message stream)
 app.get('/api/detected-channels', (req, res) => {
@@ -4894,8 +4969,8 @@ app.post('/api/cloudflare/messages/queue', async (req, res) => {
     
     try {
         // Send user information along with the message for proper user registration
-        const result = await cloudflareClient.queueMessage(to, message, media, priority, userId, userInfo, finalContactName);
-        res.json({ ...result, available: true, userId, userInfo, contactName: finalContactName });
+        const result = await cloudflareClient.queueMessage(to, message, media, priority, userId, finalContactName);
+        res.json({ ...result, available: true, from: userId, contactName: finalContactName });
     } catch (error) {
         res.status(500).json({ 
             error: 'Cloudflare sync temporarily unavailable',

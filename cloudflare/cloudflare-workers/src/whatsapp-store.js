@@ -371,7 +371,7 @@ export class WhatsAppDataStore {
   // Queue a message for sending
   async queueMessage(request) {
     const data = await request.json();
-    const { to, message, media, priority = 'normal', userId, userInfo, contactName } = data;
+    const { to, message, media, priority = 'normal', from, contactName } = data;
 
     if (!to || !message) {
       return new Response(JSON.stringify({ error: 'to and message are required' }), {
@@ -380,9 +380,22 @@ export class WhatsAppDataStore {
       });
     }
 
-    // Register user if provided and not already registered
-    if (userId && userInfo && !this.activeUsers.has(userId)) {
-      await this.registerUser(userId, userInfo);
+    // SECURITY VALIDATION: Check if from field is valid
+    if (from && from !== 'anonymous') {
+      // Check if this is a valid user ID format (should end with @c.us)
+      if (!from.includes('@c.us')) {
+        return new Response(JSON.stringify({ 
+          error: 'Invalid from field format. Must be a valid WhatsApp user ID ending with @c.us' 
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      
+      // Register user if provided and not already registered
+      if (!this.activeUsers.has(from)) {
+        await this.registerUser(from, { id: from });
+      }
     }
 
     const queuedMessage = {
@@ -391,7 +404,7 @@ export class WhatsAppDataStore {
       message,
       media,
       priority,
-      userId: userId || 'anonymous', // Default to anonymous if no userId provided
+      from: from || 'anonymous', // Default to anonymous if no from provided
       contactName: contactName || to, // Use contact name or fallback to phone number
       status: 'queued',
       createdAt: new Date().toISOString(),
@@ -399,7 +412,7 @@ export class WhatsAppDataStore {
     };
 
     // Store in user-specific queue
-    const userQueueKey = `messageQueue_${queuedMessage.userId}`;
+    const userQueueKey = `messageQueue_${queuedMessage.from}`;
     const userQueue = await this.state.storage.get(userQueueKey) || [];
     userQueue.push(queuedMessage);
     await this.state.storage.put(userQueueKey, userQueue);
@@ -409,12 +422,12 @@ export class WhatsAppDataStore {
     await this.state.storage.put('messageQueue', this.messageQueue);
 
     // Update user activity
-    if (userId) {
-      await this.updateUserActivity(userId, 'message_queued');
+    if (from) {
+      await this.updateUserActivity(from, 'message_queued');
     }
 
     // Enhanced logging with user distinction
-    const userDisplay = userId ? `User: ${this.activeUsers.get(userId)?.name || userId}` : 'Anonymous User';
+    const userDisplay = from ? `User: ${this.activeUsers.get(from)?.name || from}` : 'Anonymous User';
     console.log(`[MESSAGE-QUEUE] ${userDisplay} queued message to ${to}`);
     console.log(`[MESSAGE-QUEUE] Message ID: ${queuedMessage.id}`);
     console.log(`[MESSAGE-QUEUE] Priority: ${priority}`);
@@ -425,7 +438,7 @@ export class WhatsAppDataStore {
       messageId: queuedMessage.id,
       to: queuedMessage.to,
       priority: queuedMessage.priority,
-      userId: queuedMessage.userId,
+      from: queuedMessage.from,
       queueLength: userQueue.length,
       userDisplay: userDisplay
     });
@@ -434,7 +447,7 @@ export class WhatsAppDataStore {
       success: true,
       messageId: queuedMessage.id,
       status: 'queued',
-      userId: queuedMessage.userId,
+      from: queuedMessage.from,
       userDisplay: userDisplay
     }), {
       headers: { 'Content-Type': 'application/json' }
@@ -444,13 +457,13 @@ export class WhatsAppDataStore {
   // Get queued messages
   async getQueuedMessages(request) {
     const url = new URL(request.url);
-    const userId = url.searchParams.get('userId');
+    const from = url.searchParams.get('from');
     
     let pendingMessages;
     
-    if (userId) {
+    if (from) {
       // Get user-specific messages
-      const userQueueKey = `messageQueue_${userId}`;
+      const userQueueKey = `messageQueue_${from}`;
       const userQueue = await this.state.storage.get(userQueueKey) || [];
       pendingMessages = userQueue.filter(msg => msg.status === 'queued');
     } else {
@@ -462,7 +475,7 @@ export class WhatsAppDataStore {
       success: true,
       data: pendingMessages,
       count: pendingMessages.length,
-      userId: userId || 'all'
+      from: from || 'all'
     }), {
       headers: { 'Content-Type': 'application/json' }
     });
@@ -470,8 +483,18 @@ export class WhatsAppDataStore {
 
   // Process message queue (mark messages as sent)
   async processMessageQueue(request) {
-    const data = await request.json();
-    const { processedMessages, userId } = data;
+    try {
+      const data = await request.json();
+      const { processedMessages, from } = data;
+
+      if (!processedMessages || !Array.isArray(processedMessages)) {
+        return new Response(JSON.stringify({ 
+          error: 'processedMessages array is required' 
+        }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
 
     let processedCount = 0;
 
@@ -488,9 +511,9 @@ export class WhatsAppDataStore {
         processedCount++;
       }
 
-      // Update in user-specific queue if userId provided
-      if (userId) {
-        const userQueueKey = `messageQueue_${userId}`;
+      // Update in user-specific queue if from provided
+      if (from) {
+        const userQueueKey = `messageQueue_${from}`;
         const userQueue = await this.state.storage.get(userQueueKey) || [];
         const userMessageIndex = userQueue.findIndex(msg => msg.id === processedMsg.id);
         if (userMessageIndex !== -1) {
@@ -510,10 +533,21 @@ export class WhatsAppDataStore {
     return new Response(JSON.stringify({
       success: true,
       processed: processedCount,
-      userId: userId || 'global'
+      from: from || 'global'
     }), {
       headers: { 'Content-Type': 'application/json' }
     });
+    
+    } catch (error) {
+      console.error('[PROCESS-QUEUE] Error:', error);
+      return new Response(JSON.stringify({ 
+        error: 'Failed to process message queue',
+        details: error.message 
+      }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
   }
 
   // Sync all data at once
