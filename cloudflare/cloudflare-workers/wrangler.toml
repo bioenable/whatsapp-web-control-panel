@@ -1,0 +1,16 @@
+name = "whatsapp-sync-worker"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[durable_objects]
+bindings = [
+  { name = "WHATSAPP_STORE", class_name = "WhatsAppDataStore" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["WhatsAppDataStore"]
+
+# Environment variables (set via Cloudflare dashboard or CLI)
+[vars]
+# API_KEY will be set via Cloudflare dashboard or wrangler secret put API_KEY 

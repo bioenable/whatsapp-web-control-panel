@@ -1,0 +1,24 @@
+{
+  "name": "whatsapp-sync-workers",
+  "version": "1.0.0",
+  "description": "Cloudflare Workers for WhatsApp data synchronization",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging",
+    "deploy:production": "wrangler deploy --env production"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241218.0"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "durable-objects",
+    "whatsapp",
+    "sync"
+  ],
+  "author": "WhatsApp Web Control",
+  "license": "MIT"
+} 

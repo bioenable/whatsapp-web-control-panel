@@ -1,185 +1,269 @@
-<div align="center">
-    <br />
-    <p>
-        <a href="https://wwebjs.dev"><img src="https://github.com/wwebjs/logos/blob/main/4_Full%20Logo%20Lockup_Small/small_banner_blue.png?raw=true" title="whatsapp-web.js" alt="WWebJS Website" width="500" /></a>
-    </p>
-    <br />
-    <p>
-		<a href="https://www.npmjs.com/package/whatsapp-web.js"><img src="https://img.shields.io/npm/v/whatsapp-web.js.svg" alt="npm" /></a>
-        <a href="https://depfu.com/github/pedroslopez/whatsapp-web.js?project_id=9765"><img src="https://badges.depfu.com/badges/4a65a0de96ece65fdf39e294e0c8dcba/overview.svg" alt="Depfu" /></a>
-        <img src="https://img.shields.io/badge/WhatsApp_Web-2.3000.1017054665-brightgreen.svg" alt="WhatsApp_Web 2.2346.52" />
-        <a href="https://discord.gg/H7DqQs4"><img src="https://img.shields.io/discord/698610475432411196.svg?logo=discord" alt="Discord server" /></a>
-	</p>
-    <br />
-</div>
+# WhatsApp Web Control System
 
-## About
-**A WhatsApp API client that connects through the WhatsApp Web browser app**
+A comprehensive WhatsApp automation and management system that works in both **standalone mode** (local only) and **Cloudflare mode** (multi-user with cloud sync).
 
-The library works by launching the WhatsApp Web browser application and managing it using Puppeteer to create an instance of WhatsApp Web, thereby mitigating the risk of being blocked. The WhatsApp API client connects through the WhatsApp Web browser app, accessing its internal functions. This grants you access to nearly all the features available on WhatsApp Web, enabling dynamic handling similar to any other Node.js application.
+## 🚀 Features
 
-> [!IMPORTANT]
-> **It is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe.**
+### **Core Features (Available in Both Modes)**
+- **WhatsApp Web Integration**: Full WhatsApp Web functionality
+- **Web Interface**: Modern responsive UI for managing messages and contacts
+- **Bulk Messaging**: Send messages to multiple contacts with scheduling
+- **Automation**: Scheduled message sending and auto-replies
+- **Local Data Storage**: All data stored locally on your machine
+- **QR Code Authentication**: Easy WhatsApp Web login
 
-## Links
+### **Cloudflare Mode Features (Optional)**
+- **Multi-User Support**: Isolated user sessions with separate message queues
+- **Real-time Message Processing**: Event-driven message handling with webhook support
+- **Channel Management**: Automatic detection and syncing of WhatsApp channels/newsletters
+- **Cloud Sync**: Data synchronized to Cloudflare Workers
+- **Channel Webpages**: Public webpages for viewing channel messages
+- **User Isolation**: Complete separation of user data and sessions
+- **Event-Driven Sync**: Immediate processing when messages are received
 
-* [Website][website]
-* [Guide][guide] ([source][guide-source]) _(work in progress)_
-* [Documentation][documentation] ([source][documentation-source])
-* [WWebJS Discord][discord]
-* [GitHub][gitHub]
-* [npm][npm]
+## 🎯 **Two Operating Modes**
 
-## Installation
+### **1. Standalone Mode (Default)**
+- **No Cloudflare required** - works completely offline
+- All features work locally on your machine
+- Perfect for personal use or single-user scenarios
+- No external dependencies or API keys needed
 
-The module is now available on npm! `npm i whatsapp-web.js`
+### **2. Cloudflare Mode (Optional)**
+- **Requires Cloudflare setup** - see `cloudflare/` folder
+- Multi-user support with cloud synchronization
+- Channel management and public webpages
+- Real-time message processing across multiple devices
 
-> [!NOTE]
-> **Node ``v18+`` is required.**
+## 📋 Prerequisites
 
-## QUICK STEPS TO UPGRADE NODE
+- Node.js (v14 or higher)
+- npm or yarn
+- WhatsApp account
+- Cloudflare account (only for Cloudflare mode)
 
-### Windows
+## 🛠️ Installation
 
-#### Manual
-Just get the latest LTS from the [official node website][nodejs].
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd whatsappweb1
+   ```
 
-#### npm
-```powershell
-sudo npm install -g n
-sudo n stable
-```
+2. **Install dependencies**
+   ```bash
+   npm install
+   ```
 
-#### Choco
-```powershell
-choco install nodejs-lts
-```
+3. **Configure environment variables**
+   Copy `.env.example` to `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+   
+   **For Standalone Mode (Default):**
+   - No configuration needed! Just run `npm start`
+   - All features work locally without any external services
+   
+   **For Cloudflare Mode (Optional):**
+   - Uncomment and configure Cloudflare settings in `.env`:
+   ```env
+   CLOUDFLARE_BASE_URL=https://your-worker-url.workers.dev
+   CLOUDFLARE_API_KEY=your-api-key-here
+   CLOUDFLARE_SYNC_INTERVAL=600000
+   CLOUDFLARE_QUEUE_INTERVAL=60000
+   ```
+   - See `cloudflare/` folder for deployment instructions
 
-#### Winget
-```powershell
-winget install OpenJS.NodeJS.LTS
-```
+4. **Start the application**
+   ```bash
+   npm start
+   ```
 
-### Ubuntu / Debian
+## ☁️ **Cloudflare Setup (Optional)**
+
+If you want to use Cloudflare mode for multi-user support and cloud sync:
+
+1. **Navigate to Cloudflare folder**
+   ```bash
+   cd cloudflare
+   ```
+
+2. **Follow the deployment guide**
+   - Read `deploy-cloudflare.md` for detailed instructions
+   - Run `./deploy-cloudflare.sh` for automated deployment
+
+3. **Configure your app**
+   - Update `.env` with your Cloudflare URL and API key
+   - Restart the application
+
+**Note**: The app works perfectly without Cloudflare in standalone mode!
+
+## 🔧 Configuration
+
+### Cloudflare Workers Setup
+
+1. **Deploy the Cloudflare Worker**
+   ```bash
+   cd cloudflare-workers
+   npm install
+   npm run deploy
+   ```
+
+2. **Update configuration**
+   - Replace `your-worker-url.workers.dev` with your actual Cloudflare Worker URL
+   - Replace `your-api-key-here` with your secure API key
+
+### WhatsApp Authentication
+
+1. **First Run**: The app will generate a QR code for WhatsApp Web authentication
+2. **Scan QR Code**: Use your WhatsApp mobile app to scan the QR code
+3. **Session Storage**: Authentication data is stored locally for future use
+
+## 📱 Usage
+
+### Web Interface
+
+Access the web interface at `http://localhost:5014` after starting the server.
+
+**Features:**
+- Contact management
+- Bulk message sending
+- Channel monitoring
+- Automation setup
+- Message templates
+
+### API Endpoints
+
+**Message Queue**
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - &&\
-sudo apt-get install -y nodejs
-```
-
-## Example usage
-
-```js
-const { Client } = require('whatsapp-web.js');
-
-const client = new Client();
-
-client.on('qr', (qr) => {
-    // Generate and scan this code with your phone
-    console.log('QR RECEIVED', qr);
-});
-
-client.on('ready', () => {
-    console.log('Client is ready!');
-});
-
-client.on('message', msg => {
-    if (msg.body == '!ping') {
-        msg.reply('pong');
+# Send message
+curl -X POST "https://your-worker-url.workers.dev/api/messages/queue" \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: your-api-key-here" \
+  -d '{
+    "to": "919876543210@c.us",
+    "message": "Hello from WhatsApp!",
+    "priority": "normal",
+    "userId": "919822218111@c.us",
+    "userInfo": {
+      "name": "User Name",
+      "phone": "919822218111",
+      "platform": "iphone"
     }
-});
-
-client.initialize();
+  }'
 ```
 
-Take a look at [example.js][examples] for another examples with additional use cases.  
-For further details on saving and restoring sessions, explore the provided [Authentication Strategies][auth-strategies].
+**Channel Management**
+```bash
+# Get all channels
+curl -H "x-api-key: your-api-key-here" \
+  "https://your-worker-url.workers.dev/api/channels"
 
+# Get channel messages
+curl -H "x-api-key: your-api-key-here" \
+  "https://your-worker-url.workers.dev/api/channels/CHANNEL_ID/messages"
+```
 
-## Supported features
+## 🏗️ Architecture
 
-| Feature  | Status |
-| ------------- | ------------- |
-| Multi Device  | ✅  |
-| Send messages  | ✅  |
-| Receive messages  | ✅  |
-| Send media (images/audio/documents)  | ✅  |
-| Send media (video)  | ✅ [(requires Google Chrome)][google-chrome]  |
-| Send stickers | ✅ |
-| Receive media (images/audio/video/documents)  | ✅  |
-| Send contact cards | ✅ |
-| Send location | ✅ |
-| Send buttons | ❌  [(DEPRECATED)][deprecated-video] |
-| Send lists | ❌  [(DEPRECATED)][deprecated-video] |
-| Receive location | ✅ | 
-| Message replies | ✅ |
-| Join groups by invite  | ✅ |
-| Get invite for group  | ✅ |
-| Modify group info (subject, description)  | ✅  |
-| Modify group settings (send messages, edit info)  | ✅  |
-| Add group participants  | ✅  |
-| Kick group participants  | ✅  |
-| Promote/demote group participants | ✅ |
-| Mention users | ✅ |
-| Mention groups | ✅ |
-| Mute/unmute chats | ✅ |
-| Block/unblock contacts | ✅ |
-| Get contact info | ✅ |
-| Get profile pictures | ✅ |
-| Set user status message | ✅ |
-| React to messages | ✅ |
-| Create polls | ✅ |
-| Channels | ✅ |
-| Vote in polls | 🔜 |
-| Communities | 🔜 |
+### Multi-User System
 
-Something missing? Make an issue and let us know!
+- **User Isolation**: Each user has their own message queue and session
+- **Session Management**: Automatic user registration and activity tracking
+- **Webhook Support**: Real-time message processing with fallback polling
 
-## Contributing
+### Sync System
 
-Feel free to open pull requests; we welcome contributions! However, for significant changes, it's best to open an issue beforehand. Make sure to review our [contribution guidelines][contributing] before creating a pull request. Before creating your own issue or pull request, always check to see if one already exists!
+- **Event-Driven**: Immediate sync when messages are received
+- **Auto Sync**: Periodic sync of chats and contacts (10 minutes)
+- **Channel Sync**: Real-time channel message archiving
 
-## Supporting the project
+### Data Flow
 
-You can support the maintainer of this project through the links below
+1. **WhatsApp Client** → Detects messages and user activity
+2. **Local Server** → Processes and queues messages
+3. **Cloudflare Worker** → Stores and manages data with Durable Objects
+4. **Web Interface** → Displays data and manages operations
 
-- [Support via GitHub Sponsors][gitHub-sponsors]
-- [Support via PayPal][support-payPal]
-- [Sign up for DigitalOcean][digitalocean] and get $200 in credit when you sign up (Referral)
+## 🔒 Security
 
-## Disclaimer
+- **API Key Authentication**: All endpoints require valid API keys
+- **User Isolation**: Complete separation of user data and sessions
+- **Environment Variables**: Sensitive data stored in environment variables
+- **Input Validation**: All inputs are validated and sanitized
 
-This project is not affiliated, associated, authorized, endorsed by, or in any way officially connected with WhatsApp or any of its subsidiaries or its affiliates. The official WhatsApp website can be found at [whatsapp.com][whatsapp]. "WhatsApp" as well as related names, marks, emblems and images are registered trademarks of their respective owners. Also it is not guaranteed you will not be blocked by using this method. WhatsApp does not allow bots or unofficial clients on their platform, so this shouldn't be considered totally safe.
+## 📊 Monitoring
 
-## License
+### Health Checks
 
-Copyright 2019 Pedro S Lopez  
+```bash
+# Local server status
+curl http://localhost:5014/api/status
 
-Licensed under the Apache License, Version 2.0 (the "License");  
-you may not use this project except in compliance with the License.  
-You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0.  
+# Cloudflare worker status
+curl -H "x-api-key: your-api-key-here" \
+  "https://your-worker-url.workers.dev/api/status"
+```
 
-Unless required by applicable law or agreed to in writing, software  
-distributed under the License is distributed on an "AS IS" BASIS,  
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.  
-See the License for the specific language governing permissions and  
-limitations under the License.  
+### Logs
 
+- **Server Logs**: Real-time logging in console
+- **User Activity**: Tracked in Cloudflare Durable Objects
+- **Message History**: Stored with timestamps and user attribution
 
-[website]: https://wwebjs.dev
-[guide]: https://guide.wwebjs.dev/guide
-[guide-source]: https://github.com/wwebjs/wwebjs.dev/tree/main
-[documentation]: https://docs.wwebjs.dev/
-[documentation-source]: https://github.com/pedroslopez/whatsapp-web.js/tree/main/docs
-[discord]: https://discord.gg/H7DqQs4
-[gitHub]: https://github.com/pedroslopez/whatsapp-web.js
-[npm]: https://npmjs.org/package/whatsapp-web.js
-[nodejs]: https://nodejs.org/en/download/
-[examples]: https://github.com/pedroslopez/whatsapp-web.js/blob/master/example.js
-[auth-strategies]: https://wwebjs.dev/guide/creating-your-bot/authentication.html
-[google-chrome]: https://wwebjs.dev/guide/creating-your-bot/handling-attachments.html#caveat-for-sending-videos-and-gifs
-[deprecated-video]: https://www.youtube.com/watch?v=hv1R1rLeVVE
-[gitHub-sponsors]: https://github.com/sponsors/pedroslopez
-[support-payPal]: https://www.paypal.me/psla/
-[digitalocean]: https://m.do.co/c/73f906a36ed4
-[contributing]: https://github.com/pedroslopez/whatsapp-web.js/blob/main/CODE_OF_CONDUCT.md
-[whatsapp]: https://whatsapp.com
+## 🚀 Deployment
+
+### Local Development
+
+```bash
+npm start
+```
+
+### Production (Cloudflare Workers)
+
+```bash
+cd cloudflare-workers
+npm run deploy
+```
+
+### Environment Variables
+
+Required environment variables:
+- `CLOUDFLARE_BASE_URL`: Your Cloudflare Worker URL
+- `CLOUDFLARE_API_KEY`: Your secure API key
+- `CLOUDFLARE_SYNC_INTERVAL`: Sync interval in milliseconds
+- `CLOUDFLARE_QUEUE_INTERVAL`: Queue processing interval in milliseconds
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🆘 Support
+
+For support and questions:
+- Create an issue in the repository
+- Check the documentation in the `/docs` folder
+- Review the API endpoints in the source code
+
+## 🔄 Changelog
+
+### v1.33.1
+- Multi-user system implementation
+- Event-driven message processing
+- Channel management system
+- Cloudflare Workers integration
+- Web interface improvements
+- Security enhancements
+
+---
+
+**Note**: This system is designed for legitimate business use cases. Please ensure compliance with WhatsApp's Terms of Service and applicable laws in your jurisdiction.
