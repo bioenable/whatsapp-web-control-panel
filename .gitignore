@@ -75,7 +75,7 @@ dist
 
 # Gatsby files
 .cache/
-public
+# public - REMOVED: This folder contains the web interface and should be tracked
 
 # Storybook build outputs
 .out
