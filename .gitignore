@@ -199,6 +199,8 @@ test-*.sh
 test-*.html
 *test*.js
 *test*.sh
+# Essential test scripts
+!test-contact-creation.sh
 
 # Temporary files
 temp/
