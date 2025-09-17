@@ -142,15 +142,11 @@ curl -X POST "https://your-worker-url.workers.dev/api/messages/queue" \
   -H "Content-Type: application/json" \
   -H "x-api-key: your-api-key-here" \
   -d '{
-    "to": "919876543210@c.us",
+    "to": "+919999999999@c.us",
     "message": "Hello from WhatsApp!",
     "priority": "normal",
-    "userId": "919822218111@c.us",
-    "userInfo": {
-      "name": "User Name",
-      "phone": "919822218111",
-      "platform": "iphone"
-    }
+    "from": "+918888888888@c.us",
+    "contactName": "John Doe"
   }'
 ```
 
