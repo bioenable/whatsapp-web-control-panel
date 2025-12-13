@@ -102,18 +102,79 @@ function loadChannels() {
     channelSendForm.classList.add('hidden');
     selectedChannel = null;
     
-    // Use detected channels API
-    fetch('/api/detected-channels')
-        .then(response => response.json())
-        .then(data => {
-            channels = data.channels || [];
-            updateChannelStats({ total: channels.length, method: 'detected' });
-            renderChannelList();
-        })
-        .catch(err => {
-            console.error('Failed to load channels:', err);
-            channelList.innerHTML = `<div class='text-red-600 p-2'>Failed to load channels: ${err.message}</div>`;
-        });
+    // Try multiple methods to get channels
+    Promise.allSettled([
+        // Method 1: Enhanced channels API (followed channels)
+        fetch('/api/channels/enhanced?method=followed').then(r => r.json()),
+        // Method 2: Newsletter channels
+        fetch('/api/channels/enhanced?method=newsletter').then(r => r.json()),
+        // Method 3: Detected channels from message stream
+        fetch('/api/detected-channels').then(r => r.json())
+    ]).then(results => {
+        let allChannels = [];
+        let methodUsed = 'combined';
+        
+        // Process followed channels
+        if (results[0].status === 'fulfilled') {
+            const followedData = results[0].value;
+            if (followedData.channels) {
+                allChannels = allChannels.concat(followedData.channels);
+            }
+        }
+        
+        // Process newsletter channels
+        if (results[1].status === 'fulfilled') {
+            const newsletterData = results[1].value;
+            if (newsletterData.channels) {
+                allChannels = allChannels.concat(newsletterData.channels);
+            }
+        }
+        
+        // Process detected channels
+        if (results[2].status === 'fulfilled') {
+            const detectedData = results[2].value;
+            if (detectedData.channels) {
+                allChannels = allChannels.concat(detectedData.channels);
+            }
+        }
+        
+        // Remove duplicates based on channel ID
+        const uniqueChannels = allChannels.reduce((acc, channel) => {
+            const existingIndex = acc.findIndex(ch => ch.id === channel.id);
+            if (existingIndex === -1) {
+                acc.push(channel);
+            } else {
+                // Merge data, preferring more complete information
+                acc[existingIndex] = { ...acc[existingIndex], ...channel };
+            }
+            return acc;
+        }, []);
+        
+        channels = uniqueChannels;
+        updateChannelStats({ total: channels.length, method: methodUsed });
+        renderChannelList();
+    }).catch(err => {
+        console.error('Failed to load channels:', err);
+        channelList.innerHTML = `<div class='text-red-600 p-2'>Failed to load channels: ${err.message}</div>`;
+    });
+}
+
+// Manual channel discovery
+async function discoverChannels() {
+    try {
+        const response = await fetch('/api/channels/discover', { method: 'POST' });
+        const result = await response.json();
+        
+        if (result.success) {
+            console.log(`[CHANNEL-DISCOVERY] Found ${result.channels} channels`);
+            // Reload channels after discovery
+            loadChannels();
+        } else {
+            console.error('[CHANNEL-DISCOVERY] Discovery failed:', result.error);
+        }
+    } catch (error) {
+        console.error('[CHANNEL-DISCOVERY] Discovery error:', error);
+    }
 }
 
 // Update channel statistics
@@ -514,8 +575,14 @@ function renderIncomingChannelMessages() {
 
 // Reply to a channel message (opens send message tab with pre-filled recipient)
 function replyToChannelMessage(senderId, messageId) {
-    // Switch to send message tab
-    document.getElementById('send-tab').click();
+    // Switch to messages tab
+    document.getElementById('messages-tab').click();
+    // Show Send Message sub-tab
+    setTimeout(() => {
+        if (typeof window.showMessagesSubTab === 'function') {
+            window.showMessagesSubTab('send-message');
+        }
+    }, 100);
     
     // Pre-fill the recipient input
     const recipientInput = document.getElementById('recipient-input');

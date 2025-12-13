@@ -14,6 +14,8 @@ const SENT_MESSAGES_FILE = path.join(__dirname, 'sent_messages.json');
 const DETECTED_CHANNELS_FILE = path.join(__dirname, 'detected_channels.json');
 const LEADS_FILE = path.join(__dirname, 'leads.json');
 const LEADS_CONFIG_FILE = path.join(__dirname, 'leads-config.json');
+const CLOUDFLARE_LOGS_FILE = path.join(__dirname, 'cloudflare_logs.json');
+const CLOUDFLARE_MESSAGES_FILE = path.join(__dirname, 'cloudflare_messages.json');
 const fetch = require('node-fetch'); // Add at the top with other requires
 const TEMPLATE_MEDIA_DIR = path.join(__dirname, 'public', 'message-templates');
 if (!fs.existsSync(TEMPLATE_MEDIA_DIR)) fs.mkdirSync(TEMPLATE_MEDIA_DIR, { recursive: true });
@@ -36,6 +38,14 @@ const parse = require('csv-parse/sync').parse;
 const os = require('os');
 require('dotenv').config();
 const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY;
+
+// Log environment configuration status
+console.log('[CONFIG] Environment variables loaded:');
+console.log(`[CONFIG] GOOGLE_API_KEY: ${GOOGLE_API_KEY ? 'Set' : 'Not set'}`);
+console.log(`[CONFIG] CLOUDFLARE_BASE_URL: ${process.env.CLOUDFLARE_BASE_URL ? 'Set' : 'Not set'}`);
+console.log(`[CONFIG] CLOUDFLARE_API_KEY: ${process.env.CLOUDFLARE_API_KEY ? 'Set' : 'Not set'}`);
+console.log(`[CONFIG] LEADS_API_URL: ${process.env.LEADS_API_URL ? 'Set' : 'Not set'}`);
+console.log(`[CONFIG] LEADS_API_KEY: ${process.env.LEADS_API_KEY ? 'Set' : 'Not set'}`);
 const GOOGLE_MODEL = process.env.GOOGLE_MODEL || 'gemini-2.0-flash';
 const AUTOMATIONS_FILE = path.join(__dirname, 'automations.json');
 const cron = require('node-cron');
@@ -45,6 +55,128 @@ const mime = require('mime-types');
 // Initialize Cloudflare client
 let cloudflareClient = null;
 let standaloneMode = false;
+
+// Cloudflare log management constants
+const CLOUDFLARE_LOG_MAX_SIZE = 10 * 1024 * 1024; // 10 MB
+const CLOUDFLARE_LOG_MAX_ENTRIES = 5000;
+
+// Append Cloudflare sync log entry
+function appendCloudflareLog(entry) {
+    try {
+        let logs = [];
+        let currentLogFile = CLOUDFLARE_LOGS_FILE;
+        let fileIndex = 0;
+
+        // Find the current log file (handle rotation)
+        while (fs.existsSync(currentLogFile)) {
+            const stats = fs.statSync(currentLogFile);
+            if (stats.size < CLOUDFLARE_LOG_MAX_SIZE) {
+                break;
+            }
+            fileIndex++;
+            const baseName = CLOUDFLARE_LOGS_FILE.replace('.json', '');
+            currentLogFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
+        }
+
+        // Read existing logs from the current file
+        if (fs.existsSync(currentLogFile)) {
+            try {
+                const fileContent = fs.readFileSync(currentLogFile, 'utf8');
+                if (fileContent.trim()) {
+                    logs = JSON.parse(fileContent);
+                }
+            } catch (e) {
+                console.error(`[CLOUDFLARE-LOG] Corrupted log file ${currentLogFile}, backing up and creating new:`, e.message);
+                const backupPath = currentLogFile.replace('.json', `_corrupted_${Date.now()}.json`);
+                try {
+                    fs.renameSync(currentLogFile, backupPath);
+                } catch (backupErr) {
+                    console.error(`[CLOUDFLARE-LOG] Failed to backup corrupted log:`, backupErr.message);
+                }
+                logs = [];
+            }
+        }
+
+        // Ensure logs is an array
+        if (!Array.isArray(logs)) {
+            logs = [];
+        }
+
+        // Add new entry at the beginning (most recent first)
+        logs.unshift({ id: uuidv4(), ...entry, timestamp: new Date().toISOString() });
+
+        // Keep only last CLOUDFLARE_LOG_MAX_ENTRIES log entries
+        if (logs.length > CLOUDFLARE_LOG_MAX_ENTRIES) {
+            logs = logs.slice(0, CLOUDFLARE_LOG_MAX_ENTRIES);
+        }
+
+        const writeSuccess = writeJson(currentLogFile, logs);
+        if (!writeSuccess) {
+            console.log(`[CLOUDFLARE-LOG] Failed to save log due to disk space: ${currentLogFile}`);
+        }
+    } catch (error) {
+        console.error(`[ERROR] Failed to append Cloudflare log:`, error.message);
+    }
+}
+
+// Append Cloudflare message entry
+function appendCloudflareMessage(entry) {
+    try {
+        let messages = [];
+        let currentMessageFile = CLOUDFLARE_MESSAGES_FILE;
+        let fileIndex = 0;
+
+        // Find the current message file (handle rotation)
+        while (fs.existsSync(currentMessageFile)) {
+            const stats = fs.statSync(currentMessageFile);
+            if (stats.size < CLOUDFLARE_LOG_MAX_SIZE) {
+                break;
+            }
+            fileIndex++;
+            const baseName = CLOUDFLARE_MESSAGES_FILE.replace('.json', '');
+            currentMessageFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
+        }
+
+        // Read existing messages from the current file
+        if (fs.existsSync(currentMessageFile)) {
+            try {
+                const fileContent = fs.readFileSync(currentMessageFile, 'utf8');
+                if (fileContent.trim()) {
+                    messages = JSON.parse(fileContent);
+                }
+            } catch (e) {
+                console.error(`[CLOUDFLARE-MESSAGE] Corrupted message file ${currentMessageFile}, backing up and creating new:`, e.message);
+                const backupPath = currentMessageFile.replace('.json', `_corrupted_${Date.now()}.json`);
+                try {
+                    fs.renameSync(currentMessageFile, backupPath);
+                } catch (backupErr) {
+                    console.error(`[CLOUDFLARE-MESSAGE] Failed to backup corrupted file:`, backupErr.message);
+                }
+                messages = [];
+            }
+        }
+
+        // Ensure messages is an array
+        if (!Array.isArray(messages)) {
+            messages = [];
+        }
+
+        // Add new entry at the beginning (most recent first)
+        messages.unshift({ id: uuidv4(), ...entry, timestamp: new Date().toISOString() });
+
+        // Keep only last CLOUDFLARE_LOG_MAX_ENTRIES message entries
+        if (messages.length > CLOUDFLARE_LOG_MAX_ENTRIES) {
+            messages = messages.slice(0, CLOUDFLARE_LOG_MAX_ENTRIES);
+        }
+
+        const writeSuccess = writeJson(currentMessageFile, messages);
+        if (!writeSuccess) {
+            console.log(`[CLOUDFLARE-MESSAGE] Failed to save message due to disk space: ${currentMessageFile}`);
+        }
+    } catch (error) {
+        console.error(`[ERROR] Failed to append Cloudflare message:`, error.message);
+    }
+}
 
 // Initialize Cloudflare sync
 async function initializeCloudflareSync() {
@@ -70,13 +202,35 @@ async function initializeCloudflareSync() {
     const connected = await cloudflareClient.init();
     if (connected) {
       console.log('[CLOUDFLARE] Connected to Cloudflare Workers');
+      appendCloudflareLog({
+        type: 'connection',
+        status: 'connected',
+        message: 'Successfully connected to Cloudflare Workers',
+        baseUrl: cloudflareBaseUrl
+      });
       
       // Start auto sync with optimized intervals
       cloudflareClient.startAutoSync(async () => {
         try {
+          appendCloudflareLog({
+            type: 'sync',
+            status: 'started',
+            message: 'Starting auto sync'
+          });
           await syncWhatsAppDataToCloudflare();
+          appendCloudflareLog({
+            type: 'sync',
+            status: 'completed',
+            message: 'Auto sync completed successfully'
+          });
         } catch (error) {
           console.error('[CLOUDFLARE] Sync error:', error);
+          appendCloudflareLog({
+            type: 'sync',
+            status: 'error',
+            message: 'Auto sync failed',
+            error: error.message
+          });
         }
       });
       
@@ -86,6 +240,12 @@ async function initializeCloudflareSync() {
           await processQueuedMessages();
         } catch (error) {
           console.log('[CLOUDFLARE] Queue processing error:', error.message);
+          appendCloudflareLog({
+            type: 'queue',
+            status: 'error',
+            message: 'Queue processing error',
+            error: error.message
+          });
         }
       });
       
@@ -96,6 +256,12 @@ async function initializeCloudflareSync() {
       await startEventDrivenListening();
     } else {
       console.log('[CLOUDFLARE] Failed to connect to Cloudflare Workers. Cloudflare sync will be disabled.');
+      appendCloudflareLog({
+        type: 'connection',
+        status: 'failed',
+        message: 'Failed to connect to Cloudflare Workers',
+        baseUrl: cloudflareBaseUrl
+      });
     }
   } catch (error) {
     console.log('[CLOUDFLARE] Initialization failed. Cloudflare sync will be disabled.');
@@ -608,7 +774,27 @@ async function processQueuedMessages() {
         let media = null;
         
         if (queuedMsg.media) {
-          media = MessageMedia.fromUrl(queuedMsg.media);
+          // Handle both URL strings (backward compatibility) and base64 objects (new format)
+          try {
+            if (typeof queuedMsg.media === 'string') {
+              // Legacy format: media is a URL string
+              media = await MessageMedia.fromUrl(queuedMsg.media);
+            } else if (queuedMsg.media && typeof queuedMsg.media === 'object' && queuedMsg.media.mimetype && queuedMsg.media.data) {
+              // New format: media is an object with {mimetype, data, filename}
+              media = new MessageMedia(
+                queuedMsg.media.mimetype,
+                queuedMsg.media.data,
+                queuedMsg.media.filename || null
+              );
+            } else {
+              console.warn(`[CLOUDFLARE] Invalid media format for message ${queuedMsg.id}:`, queuedMsg.media);
+            }
+          } catch (mediaError) {
+            // Gracefully handle media processing errors (backward compatibility)
+            console.error(`[CLOUDFLARE] Failed to process media for message ${queuedMsg.id}:`, mediaError.message);
+            // Continue without media - send text message only
+            media = null;
+          }
         }
         
         const message = await client.sendMessage(chatId, queuedMsg.message, { media });
@@ -620,6 +806,17 @@ async function processQueuedMessages() {
           messageId: message.id._serialized
         });
         
+        // Track message in Cloudflare messages log
+        appendCloudflareMessage({
+          queueId: queuedMsg.id,
+          messageId: message.id._serialized,
+          to: chatId,
+          message: queuedMsg.message,
+          hasMedia: !!media,
+          status: 'sent',
+          sentAt: new Date().toISOString()
+        });
+        
         console.log(`[CLOUDFLARE] Message sent successfully: ${queuedMsg.id}`);
       } catch (error) {
         console.error(`[CLOUDFLARE] Failed to send queued message ${queuedMsg.id}:`, error);
@@ -628,6 +825,16 @@ async function processQueuedMessages() {
           id: queuedMsg.id,
           status: 'failed',
           error: error.message
+        });
+        
+        // Track failed message
+        appendCloudflareMessage({
+          queueId: queuedMsg.id,
+          to: queuedMsg.to,
+          message: queuedMsg.message,
+          status: 'failed',
+          error: error.message,
+          failedAt: new Date().toISOString()
         });
       }
     }
@@ -679,6 +886,14 @@ function initializeJsonFiles() {
                 autoReply: false,
                 autoReplyPrompt: ''
             }
+        },
+        {
+            path: CLOUDFLARE_LOGS_FILE,
+            defaultContent: []
+        },
+        {
+            path: CLOUDFLARE_MESSAGES_FILE,
+            defaultContent: []
         }
     ];
     
@@ -700,21 +915,89 @@ function initializeJsonFiles() {
 
 // Initialize JSON files on startup
 initializeJsonFiles();
-// Initialize JSON files on startup
-initializeJsonFiles();
 const genAI = new GoogleGenAI({});
 const groundingTool = { googleSearch: {} };
-const genAIConfig = { tools: [groundingTool], output_token_limit: 512 };
-async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessage }) {
+const genAIConfig = { tools: [groundingTool], maxOutputTokens: 512 };
+async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessage, useJsonMode = false }) {
   // Compose prompt for grounding
-  const contents = `${systemPrompt}\n\nChat history:\n${chatHistory}\n\nUser: ${userMessage}\n\n${autoReplyPrompt}`;
+  let contents = `${systemPrompt}\n\nChat history:\n${chatHistory}\n\nUser: ${userMessage}\n\n${autoReplyPrompt}`;
+  
+  // For JSON mode, add schema instructions to the prompt
+  if (useJsonMode) {
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        message: {
+          type: 'string',
+          description: 'The clean message text to send to WhatsApp, without any commentary, notes, or explanations'
+        },
+        hasNewMessage: {
+          type: 'boolean',
+          description: 'true if there is a unique new message to send, false if no new content or duplicate'
+        },
+        notes: {
+          type: 'string',
+          description: 'Optional internal notes or commentary (not to be sent)'
+        }
+      },
+      required: ['message', 'hasNewMessage']
+    };
+    
+    contents += `\n\nIMPORTANT: You must respond with ONLY a valid JSON object matching this schema:\n${JSON.stringify(jsonSchema, null, 2)}\n\nReturn ONLY the JSON object, no other text. The "message" field should contain ONLY the text to be sent to WhatsApp, with no commentary, explanations, or notes. Any commentary should go in the "notes" field.`;
+  }
+  
   try {
+    const config = { ...genAIConfig };
+    
+    // For JSON mode, use responseMimeType if supported, otherwise rely on prompt instructions
+    if (useJsonMode) {
+      // Try to set response format to JSON
+      try {
+        config.responseMimeType = 'application/json';
+      } catch (e) {
+        // If not supported, rely on prompt instructions
+        console.log('[GenAI] JSON mode: Using prompt-based JSON formatting');
+      }
+    }
+    
     const response = await genAI.models.generateContent({
       model: process.env.GOOGLE_MODEL || 'gemini-2.5-flash',
       contents,
-      config: genAIConfig
+      config
     });
-    return response.text;
+    
+    const responseText = response.text;
+    
+    // If JSON mode, parse and extract message
+    if (useJsonMode) {
+      try {
+        // Try to extract JSON from response (might have markdown code blocks)
+        let jsonText = responseText.trim();
+        if (jsonText.startsWith('```json')) {
+          jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+        } else if (jsonText.startsWith('```')) {
+          jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+        }
+        
+        const parsed = JSON.parse(jsonText);
+        return {
+          message: parsed.message || responseText,
+          hasNewMessage: parsed.hasNewMessage !== false, // Default to true if not specified
+          notes: parsed.notes || ''
+        };
+      } catch (parseErr) {
+        console.error('[GenAI] Failed to parse JSON response:', parseErr);
+        console.error('[GenAI] Raw response:', responseText);
+        // Fallback: return the text as message
+        return {
+          message: responseText,
+          hasNewMessage: true,
+          notes: 'Failed to parse JSON response'
+        };
+      }
+    }
+    
+    return responseText;
   } catch (err) {
     console.error('[GenAI] Error:', err);
     return null;
@@ -722,24 +1005,95 @@ async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessa
 }
 function appendAutomationLog(automation, entry) {
   try {
-    const logPath = path.join(__dirname, automation.logFile);
+    // Ensure entry has timestamp
+    if (!entry.timestamp) {
+      entry.timestamp = new Date().toISOString();
+    }
+    
+    // Get current log file path
+    let logPath = path.join(__dirname, automation.logFile);
+    let logFileIndex = 0;
+    
+    // Check if current log file exists and is too large (10MB limit)
+    if (fs.existsSync(logPath)) {
+      const stats = fs.statSync(logPath);
+      const fileSizeMB = stats.size / (1024 * 1024);
+      
+      if (fileSizeMB >= 10) {
+        // Find the next available log file number
+        const baseName = automation.logFile.replace('.json', '');
+        let nextIndex = 1;
+        let nextLogPath;
+        
+        do {
+          nextLogPath = path.join(__dirname, `${baseName}_${nextIndex}.json`);
+          nextIndex++;
+        } while (fs.existsSync(nextLogPath) && nextIndex < 1000); // Safety limit
+        
+        // Create new log file
+        logPath = nextLogPath;
+        automation.logFile = path.basename(nextLogPath);
+        
+        // Update automation record with new log file name
+        const automations = readAutomations();
+        const automationIndex = automations.findIndex(a => a.id === automation.id);
+        if (automationIndex !== -1) {
+          automations[automationIndex].logFile = automation.logFile;
+          writeAutomations(automations);
+        }
+        
+        console.log(`[AUTOMATION] Rotated log file for ${automation.chatName} to ${automation.logFile}`);
+      }
+    }
+    
+    // Read existing logs
     let logs = [];
     if (fs.existsSync(logPath)) {
-      try { logs = JSON.parse(fs.readFileSync(logPath, 'utf8')); } catch {}
+      try { 
+        const fileContent = fs.readFileSync(logPath, 'utf8');
+        if (fileContent.trim()) {
+          logs = JSON.parse(fileContent);
+        }
+      } catch (parseErr) {
+        console.error(`[AUTOMATION] Failed to parse log file ${logPath}:`, parseErr.message);
+        // Create backup of corrupted file
+        const backupPath = logPath.replace('.json', '_corrupted_' + Date.now() + '.json');
+        try {
+          fs.copyFileSync(logPath, backupPath);
+          console.log(`[AUTOMATION] Created backup of corrupted log: ${backupPath}`);
+        } catch (backupErr) {
+          console.error(`[AUTOMATION] Failed to backup corrupted log:`, backupErr.message);
+        }
+        logs = [];
+      }
     }
-    logs.unshift({ ...entry, time: new Date().toISOString() });
     
-    // Keep only last 1000 log entries to prevent disk space issues
-    if (logs.length > 1000) {
-      logs = logs.slice(0, 1000);
+    // Ensure logs is an array
+    if (!Array.isArray(logs)) {
+      logs = [];
     }
     
+    // Add new entry at the beginning (most recent first)
+    logs.unshift({
+      id: require('crypto').randomBytes(8).toString('hex'), // Unique ID for each log entry
+      ...entry,
+      timestamp: entry.timestamp || new Date().toISOString()
+    });
+    
+    // Keep only last 5000 log entries per file to prevent excessive memory usage
+    // With rotation, this gives us ~50MB total per automation (10 files * 5MB each)
+    if (logs.length > 5000) {
+      logs = logs.slice(0, 5000);
+    }
+    
+    // Write logs with proper formatting
     const writeSuccess = writeJson(logPath, logs);
     if (!writeSuccess) {
       console.log(`[AUTOMATION] Failed to save log due to disk space: ${automation.chatName}`);
     }
   } catch (error) {
     console.error(`[ERROR] Failed to append automation log:`, error.message);
+    console.error(`[ERROR] Stack:`, error.stack);
     // Don't let log errors crash the app
   }
 }
@@ -1025,8 +1379,6 @@ const client = new Client({
             '--disable-blink-features=AutomationControlled',
             '--disable-extensions',
             '--disable-plugins',
-            '--disable-images',
-            '--disable-javascript',
             '--disable-default-apps'
         ],
         timeout: 120000, // Increase timeout to 2 minutes
@@ -1076,6 +1428,12 @@ client.on('ready', async () => {
         console.error('Failed to load chats:', err.message);
         chatsCache = [];
     }
+    
+    // Run initial channel discovery
+    discoverChannels();
+    
+    // Set up periodic channel discovery (every 5 minutes)
+    setInterval(discoverChannels, 5 * 60 * 1000);
 });
 
 client.on('authenticated', () => {
@@ -1113,12 +1471,27 @@ client.on('message', async (msg) => {
     console.log('New message received:', msg.body);
     console.log('Message from:', msg.from, 'Type:', msg.type, 'Author:', msg.author);
     
-    // Check if this is a channel message (not from @c.us or @g.us, or specifically from @newsletter)
+    // Enhanced channel detection logic
     const from = msg.from || msg.author;
-    const isChannelMessage = from && (!from.endsWith('@c.us') && !from.endsWith('@g.us') || from.endsWith('@newsletter'));
+    const isChannelMessage = from && (
+        from.endsWith('@newsletter') || 
+        from.endsWith('@broadcast') || 
+        from === 'status@broadcast' ||
+        (!from.endsWith('@c.us') && !from.endsWith('@g.us') && from.includes('@'))
+    );
     
     if (isChannelMessage) {
         console.log('Channel message detected from:', from);
+        
+        // Determine channel type more accurately
+        let channelType = 'channel';
+        if (from.endsWith('@newsletter')) {
+            channelType = 'newsletter';
+        } else if (from.endsWith('@broadcast') || from === 'status@broadcast') {
+            channelType = 'broadcast';
+        } else if (from.includes('@')) {
+            channelType = 'channel';
+        }
         
         const messageData = {
             id: msg.id._serialized || msg.id,
@@ -1128,14 +1501,28 @@ client.on('message', async (msg) => {
             type: msg.type || 'text',
             author: msg.author || from,
             isChannelMessage: true,
-            channelType: from.endsWith('@newsletter') ? 'newsletter' : (from === 'status@broadcast' ? 'broadcast' : 'channel')
+            channelType: channelType
         };
         
-        // Store in detected channels file
+        // Try to get channel name from the chat if available
+        let channelName = from;
+        try {
+            const chat = await client.getChatById(from);
+            if (chat && chat.name) {
+                channelName = chat.name;
+            }
+        } catch (error) {
+            console.log(`Could not get chat name for ${from}:`, error.message);
+        }
+        
+        // Store in detected channels file with enhanced information
         addDetectedChannel(from, {
+            name: channelName,
             lastMessage: msg.body ? msg.body.substring(0, 100) : '',
             lastSeen: new Date().toISOString(),
-            type: messageData.channelType
+            type: channelType,
+            isNewsletter: channelType === 'newsletter',
+            isBroadcast: channelType === 'broadcast'
         });
         
         // Immediate sync for channel messages (event-driven)
@@ -1173,50 +1560,15 @@ client.on('message', async (msg) => {
     if (!msg.fromMe) {
         let processed = false;
         
-        // 1. Check regular automations first
+        // 1. Check regular automations first (auto-reply functionality removed)
         const automations = readAutomations().filter(a => a.status === 'active' && a.chatId === msg.from);
         for (const a of automations) {
             // Skip channel automations for auto-reply (channels only support scheduled messages)
             const isChannel = a.automationType === 'channel' || a.chatId.endsWith('@newsletter') || a.chatId.endsWith('@broadcast');
             if (isChannel) continue;
             
-            // Compose chat history (last 100 messages)
-            let chatHistory = '';
-            try {
-                const chat = await client.getChatById(a.chatId);
-                const msgs = await chat.fetchMessages({ limit: 100 });
-                chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body}`).join('\n');
-            } catch (err) {
-                console.error(`[AUTOMATION] Failed to get chat history for auto-reply:`, err.message);
-                // Continue without chat history if frame is detached
-                if (err.message.includes('detached Frame')) {
-                    console.log('[AUTOMATION] Frame detached, continuing without chat history');
-                }
-            }
-            // Call GenAI
-            const aiReply = await callGenAI({
-                systemPrompt: a.systemPrompt,
-                autoReplyPrompt: a.autoReplyPrompt,
-                chatHistory,
-                userMessage: msg.body
-            });
-            if (!aiReply) {
-                appendAutomationLog(a, { type: 'error', message: 'GenAI failed for auto-reply' });
-                continue;
-            }
-            try {
-                await msg.reply(aiReply);
-                appendAutomationLog(a, { type: 'auto-reply', message: aiReply });
-                processed = true;
-            } catch (err) {
-                console.error(`[AUTOMATION] Failed to send auto-reply:`, err.message);
-                if (err.message.includes('detached Frame')) {
-                    console.log(`[AUTOMATION] Frame detached during auto-reply, skipping`);
-                    appendAutomationLog(a, { type: 'error', message: 'Frame detached - WhatsApp Web needs reconnection' });
-                } else {
-                    appendAutomationLog(a, { type: 'error', message: 'Failed to send auto-reply: ' + err.message });
-                }
-            }
+            // Auto-reply functionality has been removed - skip processing
+            continue;
         }
         
         // 2. Check leads auto-reply if no automation handled it
@@ -1449,35 +1801,57 @@ setInterval(async () => {
                 ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
                 : normalizedNumber;
             
-            // Check if contact exists and add if needed
-            let contactExists = false;
-            let existingContact = null;
+            // Check if this is a group (ends with @g.us)
+            const isGroup = chatId.endsWith('@g.us');
             
-            try {
-                existingContact = await client.getContactById(chatId);
-                if (existingContact && existingContact.isMyContact) {
-                    // Check if contact has proper name
-                    const hasProperName = existingContact.name && 
-                                        existingContact.name !== 'undefined' && 
-                                        existingContact.name !== undefined && 
-                                        existingContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
-                                        existingContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
-                    
-                    if (hasProperName) {
-                        console.log(`[BULK] Contact exists with proper name for ${normalizedNumber}: ${existingContact.name}`);
-                        contactExists = true;
-                    } else {
-                        console.log(`[BULK] Contact exists but needs name update for ${normalizedNumber}: ${existingContact.name} -> ${r.name || 'generated name'}`);
+            // For groups, verify we can access the group chat
+            if (isGroup) {
+                try {
+                    const groupChat = await client.getChatById(chatId);
+                    if (!groupChat) {
+                        throw new Error(`Cannot access group ${chatId}. Account may not be a member.`);
                     }
-                } else {
-                    console.log(`[BULK] Contact does not exist for ${normalizedNumber}, adding...`);
+                    console.log(`[BULK] Group verified: ${groupChat.name || chatId}`);
+                    // Skip contact addition for groups
+                } catch (groupErr) {
+                    console.error(`[BULK] Group verification failed for ${chatId}:`, groupErr.message);
+                    records[i].status = 'failed';
+                    records[i].sent_datetime = new Date().toISOString();
+                    records[i].error = `Failed to verify group access: ${groupErr.message}`;
+                    changed = true;
+                    writeJson(BULK_FILE, records);
+                    continue; // Skip to next message
                 }
-            } catch (err) {
-                console.log(`[BULK] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
-            }
-            
-            // Add contact if it doesn't exist or needs name update
-            if (!contactExists) {
+            } else {
+                // For individual contacts, check if contact exists and add if needed
+                let contactExists = false;
+                let existingContact = null;
+                
+                try {
+                    existingContact = await client.getContactById(chatId);
+                    if (existingContact && existingContact.isMyContact) {
+                        // Check if contact has proper name
+                        const hasProperName = existingContact.name && 
+                                            existingContact.name !== 'undefined' && 
+                                            existingContact.name !== undefined && 
+                                            existingContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
+                                            existingContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
+                        
+                        if (hasProperName) {
+                            console.log(`[BULK] Contact exists with proper name for ${normalizedNumber}: ${existingContact.name}`);
+                            contactExists = true;
+                        } else {
+                            console.log(`[BULK] Contact exists but needs name update for ${normalizedNumber}: ${existingContact.name} -> ${r.name || 'generated name'}`);
+                        }
+                    } else {
+                        console.log(`[BULK] Contact does not exist for ${normalizedNumber}, adding...`);
+                    }
+                } catch (err) {
+                    console.log(`[BULK] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
+                }
+                
+                // Add contact if it doesn't exist or needs name update
+                if (!contactExists) {
                 try {
                     // Generate name if not available
                     let firstName = '';
@@ -1546,6 +1920,7 @@ setInterval(async () => {
                     changed = true;
                     writeJson(BULK_FILE, records);
                     continue; // Skip to next message
+                }
                 }
             }
             
@@ -1649,17 +2024,76 @@ setInterval(async () => {
                 }
             }
             
-            // Call GenAI to generate scheduled message
-            const scheduledMessage = await callGenAI({
+            // Call GenAI to generate scheduled message with JSON mode for structured output
+            const genAIResponse = await callGenAI({
                 systemPrompt: automation.systemPrompt,
-                autoReplyPrompt: automation.scheduledPrompt || automation.autoReplyPrompt,
+                autoReplyPrompt: automation.scheduledPrompt || '',
                 chatHistory,
-                userMessage: 'Generate a scheduled message for today'
+                userMessage: 'Generate a scheduled message for today',
+                useJsonMode: true
             });
             
-            if (!scheduledMessage) {
+            if (!genAIResponse) {
                 console.error(`[AUTOMATION] GenAI failed to generate message for ${automation.chatName}`);
-                appendAutomationLog(automation, { type: 'error', message: 'GenAI failed for scheduled message' });
+                appendAutomationLog(automation, { 
+                    type: 'error', 
+                    message: 'GenAI failed for scheduled message',
+                    timestamp: new Date().toISOString()
+                });
+                continue;
+            }
+            
+            // Extract message and check if it's new
+            let scheduledMessage;
+            let hasNewMessage = true;
+            let aiNotes = '';
+            
+            if (typeof genAIResponse === 'object' && genAIResponse.message !== undefined) {
+                // JSON mode response
+                scheduledMessage = genAIResponse.message;
+                hasNewMessage = genAIResponse.hasNewMessage;
+                aiNotes = genAIResponse.notes || '';
+            } else {
+                // Fallback: plain text response
+                scheduledMessage = genAIResponse;
+            }
+            
+            // Skip if no new message
+            if (!hasNewMessage) {
+                console.log(`[AUTOMATION] No new message for ${automation.chatName}, skipping send`);
+                appendAutomationLog(automation, { 
+                    type: 'skipped', 
+                    message: 'No new unique message to send',
+                    notes: aiNotes,
+                    timestamp: new Date().toISOString()
+                });
+                continue;
+            }
+            
+            // Clean the message - remove any leading/trailing commentary patterns
+            scheduledMessage = scheduledMessage.trim();
+            
+            // Remove common commentary patterns at the start
+            const commentaryPatterns = [
+                /^I have reviewed.*?\.\s*---\s*/i,
+                /^After reviewing.*?\.\s*---\s*/i,
+                /^Based on.*?\.\s*---\s*/i,
+                /^Currently.*?\.\s*---\s*/i,
+                /^Therefore.*?\.\s*---\s*/i
+            ];
+            
+            for (const pattern of commentaryPatterns) {
+                scheduledMessage = scheduledMessage.replace(pattern, '');
+            }
+            
+            if (!scheduledMessage || scheduledMessage.length === 0) {
+                console.error(`[AUTOMATION] Generated message is empty for ${automation.chatName}`);
+                appendAutomationLog(automation, { 
+                    type: 'error', 
+                    message: 'Generated message is empty after cleaning',
+                    notes: aiNotes,
+                    timestamp: new Date().toISOString()
+                });
                 continue;
             }
             
@@ -1711,8 +2145,13 @@ setInterval(async () => {
                 writeAutomations(automationsList);
             }
             
-            // Log the scheduled message
-            appendAutomationLog(automation, { type: 'scheduled', message: scheduledMessage });
+            // Log the scheduled message with notes if available
+            appendAutomationLog(automation, { 
+                type: 'scheduled', 
+                message: scheduledMessage,
+                notes: aiNotes,
+                timestamp: new Date().toISOString()
+            });
             
             console.log(`[AUTOMATION] Successfully sent scheduled message to ${automation.chatName}`);
             
@@ -1795,6 +2234,65 @@ function getDetectedChannels() {
     return readJson(DETECTED_CHANNELS_FILE);
 }
 
+// Proactive channel discovery function
+async function discoverChannels() {
+    if (!ready) return;
+    
+    try {
+        console.log('[CHANNEL-DISCOVERY] Starting proactive channel discovery...');
+        
+        // Method 1: Get followed channels
+        const chats = await client.getChats();
+        const followedChannels = chats.filter(chat => chat.isChannel);
+        
+        for (const channel of followedChannels) {
+            addDetectedChannel(channel.id._serialized, {
+                name: channel.name,
+                type: 'followed',
+                isNewsletter: channel.id._serialized.endsWith('@newsletter'),
+                isBroadcast: channel.id._serialized === 'status@broadcast',
+                lastSeen: new Date().toISOString()
+            });
+        }
+        
+        // Method 2: Try to get newsletter collection
+        try {
+            const newsletterChannels = await client.pupPage.evaluate(async () => {
+                try {
+                    const newsletterCollection = window.Store.NewsletterCollection;
+                    const newsletters = newsletterCollection.getModelsArray();
+                    return newsletters.map(newsletter => ({
+                        id: newsletter.id._serialized,
+                        name: newsletter.name,
+                        description: newsletter.description,
+                        timestamp: newsletter.timestamp
+                    }));
+                } catch (error) {
+                    console.error('Error accessing newsletter collection:', error);
+                    return [];
+                }
+            });
+            
+            for (const newsletter of newsletterChannels) {
+                addDetectedChannel(newsletter.id, {
+                    name: newsletter.name,
+                    type: 'newsletter',
+                    isNewsletter: true,
+                    isBroadcast: false,
+                    lastSeen: new Date().toISOString()
+                });
+            }
+        } catch (error) {
+            console.log('[CHANNEL-DISCOVERY] Newsletter collection not accessible:', error.message);
+        }
+        
+        console.log(`[CHANNEL-DISCOVERY] Discovered ${followedChannels.length} followed channels`);
+        
+    } catch (error) {
+        console.error('[CHANNEL-DISCOVERY] Error during channel discovery:', error);
+    }
+}
+
 // Get detected channels by type
 function getDetectedChannelsByType(type) {
     const channels = getDetectedChannels();
@@ -1828,7 +2326,7 @@ app.get('/api/automations', (req, res) => {
 app.post('/api/automations', (req, res) => {
   try {
     const automations = readAutomations();
-    const { chatId, chatName, systemPrompt, autoReplyPrompt, schedule, status, automationType } = req.body;
+    const { chatId, chatName, systemPrompt, schedule, status, automationType } = req.body;
     
     // Validation based on automation type
     if (!chatId || !chatName || !systemPrompt) {
@@ -1837,17 +2335,13 @@ app.post('/api/automations', (req, res) => {
     
     const isChannel = automationType === 'channel' || chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
     
-    if (!isChannel && !autoReplyPrompt) {
-      return res.status(400).json({ error: 'Auto Reply Prompt is required for chat automations' });
-    }
-    
     if (isChannel && !schedule) {
       return res.status(400).json({ error: 'Schedule is required for channel automations' });
     }
     
     const id = uuidv4();
     const newAutomation = {
-      id, chatId, chatName, systemPrompt, autoReplyPrompt, schedule: schedule || null, status: status || 'active',
+      id, chatId, chatName, systemPrompt, schedule: schedule || null, status: status || 'active',
       lastSent: null, nextScheduled: null, logFile: `automation_log_${id}.json`, automationType: isChannel ? 'channel' : 'chat'
     };
     automations.push(newAutomation);
@@ -1863,21 +2357,17 @@ app.put('/api/automations/:id', (req, res) => {
     const automations = readAutomations();
     const idx = automations.findIndex(a => a.id === req.params.id);
     if (idx === -1) return res.status(404).json({ error: 'Automation not found' });
-    const { chatId, chatName, systemPrompt, autoReplyPrompt, schedule, status, automationType } = req.body;
+    const { chatId, chatName, systemPrompt, schedule, status, automationType } = req.body;
     
     // Validation based on automation type
     const isChannel = automationType === 'channel' || chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
-    
-    if (!isChannel && !autoReplyPrompt) {
-      return res.status(400).json({ error: 'Auto Reply Prompt is required for chat automations' });
-    }
     
     if (isChannel && !schedule) {
       return res.status(400).json({ error: 'Schedule is required for channel automations' });
     }
     
     Object.assign(automations[idx], { 
-      chatId, chatName, systemPrompt, autoReplyPrompt, schedule: schedule || null, status,
+      chatId, chatName, systemPrompt, schedule: schedule || null, status,
       automationType: isChannel ? 'channel' : 'chat'
     });
     writeAutomations(automations);
@@ -1903,22 +2393,80 @@ app.delete('/api/automations/:id', (req, res) => {
     res.status(500).json({ error: 'Failed to delete automation', details: err.message });
   }
 });
-// Get automation log (paginated)
+// Get automation log (paginated) - supports multiple log files
 app.get('/api/automations/:id/log', (req, res) => {
   try {
     const automations = readAutomations();
     const automation = automations.find(a => a.id === req.params.id);
     if (!automation) return res.status(404).json({ error: 'Automation not found' });
-    const logPath = path.join(__dirname, automation.logFile);
-    if (!fs.existsSync(logPath)) return res.json([]);
-    const logs = JSON.parse(fs.readFileSync(logPath, 'utf8'));
-    // Simple pagination
+    
+    // Get all log files for this automation (including rotated ones)
+    const baseName = automation.logFile.replace('.json', '');
+    const logFiles = [];
+    
+    // Find all log files for this automation
+    const files = fs.readdirSync(__dirname);
+    files.forEach(file => {
+      if (file.startsWith(baseName) && file.endsWith('.json') && !file.includes('_corrupted_')) {
+        logFiles.push(file);
+      }
+    });
+    
+    // Sort log files: base file first, then numbered files in order
+    logFiles.sort((a, b) => {
+      if (a === automation.logFile) return -1;
+      if (b === automation.logFile) return 1;
+      const aNum = parseInt(a.match(/_(\d+)\.json$/)?.[1] || '0');
+      const bNum = parseInt(b.match(/_(\d+)\.json$/)?.[1] || '0');
+      return bNum - aNum; // Newest first
+    });
+    
+    // Read all log files and merge
+    let allLogs = [];
+    for (const logFile of logFiles) {
+      const logPath = path.join(__dirname, logFile);
+      if (fs.existsSync(logPath)) {
+        try {
+          const fileContent = fs.readFileSync(logPath, 'utf8');
+          if (fileContent.trim()) {
+            const logs = JSON.parse(fileContent);
+            if (Array.isArray(logs)) {
+              // Add source file info to each log entry
+              logs.forEach(log => {
+                if (!log.sourceFile) {
+                  log.sourceFile = logFile;
+                }
+              });
+              allLogs = allLogs.concat(logs);
+            }
+          }
+        } catch (parseErr) {
+          console.error(`[AUTOMATION] Failed to parse log file ${logFile}:`, parseErr.message);
+        }
+      }
+    }
+    
+    // Sort by timestamp (most recent first)
+    allLogs.sort((a, b) => {
+      const timeA = new Date(a.timestamp || a.time || 0).getTime();
+      const timeB = new Date(b.timestamp || b.time || 0).getTime();
+      return timeB - timeA;
+    });
+    
+    // Pagination
     const page = parseInt(req.query.page) || 1;
     const pageSize = parseInt(req.query.pageSize) || 20;
     const start = (page - 1) * pageSize;
     const end = start + pageSize;
-    res.json({ logs: logs.slice(start, end), total: logs.length });
+    
+    res.json({ 
+      logs: allLogs.slice(start, end), 
+      total: allLogs.length,
+      totalFiles: logFiles.length,
+      currentFile: automation.logFile
+    });
   } catch (err) {
+    console.error('[AUTOMATION] Error fetching logs:', err);
     res.status(500).json({ error: 'Failed to fetch log', details: err.message });
   }
 });
@@ -1956,6 +2504,20 @@ app.get('/api/status', (req, res) => {
         }
     }
     
+    // Get user information if available
+    let userInfo = null;
+    if (ready && currentUserInfo) {
+        const userIdentifier = getUserIdentifier();
+        if (userIdentifier) {
+            const phoneNumber = userIdentifier.id.replace('@c.us', '');
+            userInfo = {
+                name: currentUserInfo.pushname || 'Unknown',
+                number: phoneNumber,
+                id: userIdentifier.id
+            };
+        }
+    }
+    
     res.json({ 
         status: connectionStatus, 
         qr: connectionStatus === 'qr' ? qrCode : null,
@@ -1963,6 +2525,7 @@ app.get('/api/status', (req, res) => {
         frameDetached: connectionStatus === 'error' || connectionStatus === 'disconnected',
         cloudflare: cloudflareClient ? cloudflareClient.isConnected : false,
         mode: standaloneMode ? 'standalone' : 'cloudflare',
+        user: userInfo,
         features: {
             local: true,
             cloudflare: !standaloneMode && cloudflareClient && cloudflareClient.isConnected,
@@ -2037,24 +2600,93 @@ app.get('/api/chats/:id/messages', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
     try {
         const chat = await client.getChatById(req.params.id);
+        const isGroup = chat.isGroup;
         const msgs = await chat.fetchMessages({ limit: 50 });
-        const result = msgs.map(msg => ({
-            id: msg.id._serialized || msg.id,
-            body: msg.body,
-            type: msg.type,
-            from: msg.from,
-            fromMe: msg.fromMe,
-            to: msg.to,
-            timestamp: msg.timestamp,
-            hasMedia: msg.hasMedia,
-            author: msg.author,
-            mimetype: msg.mimetype,
-            filename: msg.filename,
-            size: msg._data?.size || null
+        
+        // Process messages with sender info for groups
+        const result = await Promise.all(msgs.map(async (msg) => {
+            const messageData = {
+                id: msg.id._serialized || msg.id,
+                body: msg.body,
+                type: msg.type,
+                from: msg.from,
+                fromMe: msg.fromMe,
+                to: msg.to,
+                timestamp: msg.timestamp,
+                hasMedia: msg.hasMedia,
+                author: msg.author,
+                mimetype: msg.mimetype,
+                filename: msg.filename,
+                size: msg._data?.size || null,
+                senderName: null,
+                senderNumber: null
+            };
+            
+            // For group messages, get sender contact info
+            if (isGroup && msg.author && !msg.fromMe) {
+                try {
+                    const contact = await client.getContactById(msg.author);
+                    if (contact) {
+                        messageData.senderName = contact.pushname || contact.name || contact.number || 'Unknown';
+                        messageData.senderNumber = contact.number || msg.author.replace('@c.us', '') || null;
+                    } else {
+                        // Fallback: extract number from author ID
+                        messageData.senderNumber = msg.author.replace('@c.us', '');
+                        messageData.senderName = messageData.senderNumber;
+                    }
+                } catch (contactErr) {
+                    console.error(`[MESSAGES] Failed to get contact for ${msg.author}:`, contactErr.message);
+                    // Fallback: extract number from author ID
+                    messageData.senderNumber = msg.author.replace('@c.us', '');
+                    messageData.senderName = messageData.senderNumber;
+                }
+            }
+            
+            return messageData;
         }));
+        
         res.json(result);
     } catch (err) {
         console.error('Failed to fetch messages:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Download media from a message
+app.get('/api/chats/:chatId/messages/:messageId/media', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    try {
+        const chat = await client.getChatById(req.params.chatId);
+        const msgs = await chat.fetchMessages({ limit: 100 });
+        const msg = msgs.find(m => (m.id._serialized || m.id) === req.params.messageId);
+        
+        if (!msg) {
+            return res.status(404).json({ error: 'Message not found' });
+        }
+        
+        if (!msg.hasMedia) {
+            return res.status(400).json({ error: 'Message has no media' });
+        }
+        
+        try {
+            const media = await msg.downloadMedia();
+            if (!media) {
+                return res.status(404).json({ error: 'Media not available' });
+            }
+            
+            // Set appropriate headers
+            res.setHeader('Content-Type', media.mimetype || 'application/octet-stream');
+            res.setHeader('Content-Disposition', `inline; filename="${msg.filename || 'media'}"`);
+            
+            // Send the media data
+            const buffer = Buffer.from(media.data, 'base64');
+            res.send(buffer);
+        } catch (mediaErr) {
+            console.error('Failed to download media:', mediaErr);
+            res.status(500).json({ error: 'Failed to download media', details: mediaErr.message });
+        }
+    } catch (err) {
+        console.error('Failed to fetch message media:', err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -2265,6 +2897,129 @@ app.get('/api/channels', async (req, res) => {
     } catch (err) {
         console.error('Failed to fetch channels:', err);
         res.status(500).json({ error: 'Failed to fetch channels', details: err.message });
+    }
+});
+
+// Enhanced channel detection endpoint that combines multiple methods
+app.get('/api/channels/enhanced', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
+    try {
+        const { method = 'all' } = req.query;
+        let channels = [];
+        
+        switch (method) {
+            case 'followed':
+                // Get only followed channels using client.getChats()
+                const chats = await client.getChats();
+                channels = chats.filter(chat => chat.isChannel).map(channel => ({
+                    id: channel.id._serialized,
+                    name: channel.name,
+                    description: channel.description,
+                    isReadOnly: channel.isReadOnly,
+                    unreadCount: channel.unreadCount,
+                    timestamp: channel.timestamp,
+                    isMuted: channel.isMuted,
+                    muteExpiration: channel.muteExpiration,
+                    lastMessage: channel.lastMessage ? {
+                        id: channel.lastMessage.id._serialized,
+                        body: channel.lastMessage.body,
+                        timestamp: channel.lastMessage.timestamp,
+                        fromMe: channel.lastMessage.fromMe
+                    } : null,
+                    type: 'followed'
+                }));
+                break;
+                
+            case 'newsletter':
+                // Get newsletter channels using NewsletterCollection
+                const newsletterChannels = await client.pupPage.evaluate(async () => {
+                    try {
+                        const newsletterCollection = window.Store.NewsletterCollection;
+                        const newsletters = newsletterCollection.getModelsArray();
+                        return newsletters.map(newsletter => ({
+                            id: newsletter.id._serialized,
+                            name: newsletter.name,
+                            description: newsletter.description,
+                            isReadOnly: true,
+                            unreadCount: newsletter.unreadCount || 0,
+                            timestamp: newsletter.timestamp,
+                            isMuted: newsletter.isMuted || false,
+                            muteExpiration: newsletter.muteExpiration,
+                            lastMessage: newsletter.lastMessage ? {
+                                id: newsletter.lastMessage.id._serialized,
+                                body: newsletter.lastMessage.body,
+                                timestamp: newsletter.lastMessage.timestamp,
+                                fromMe: newsletter.lastMessage.fromMe
+                            } : null,
+                            type: 'newsletter'
+                        }));
+                    } catch (error) {
+                        console.error('Error fetching newsletter collection:', error);
+                        return [];
+                    }
+                });
+                channels = newsletterChannels;
+                break;
+                
+            case 'detected':
+                // Get channels from detected_channels.json
+                const detectedChannels = getDetectedChannels();
+                channels = detectedChannels.map(channel => ({
+                    id: channel.id,
+                    name: channel.name,
+                    description: '',
+                    isReadOnly: true,
+                    unreadCount: 0,
+                    timestamp: new Date(channel.lastSeen).getTime() / 1000,
+                    isMuted: false,
+                    muteExpiration: null,
+                    lastMessage: channel.lastMessage ? {
+                        id: 'detected',
+                        body: channel.lastMessage,
+                        timestamp: new Date(channel.lastSeen).getTime() / 1000,
+                        fromMe: false
+                    } : null,
+                    type: channel.type,
+                    isNewsletter: channel.isNewsletter,
+                    isBroadcast: channel.isBroadcast,
+                    messageCount: channel.messageCount,
+                    firstSeen: channel.firstSeen,
+                    lastSeen: channel.lastSeen
+                }));
+                break;
+                
+            default:
+                // Get all channels with all information
+                const allChats = await client.getChats();
+                const allChannels = allChats.filter(chat => chat.isChannel);
+                channels = allChannels.map(channel => ({
+                    id: channel.id._serialized,
+                    name: channel.name,
+                    description: channel.description,
+                    isReadOnly: channel.isReadOnly,
+                    unreadCount: channel.unreadCount,
+                    timestamp: channel.timestamp,
+                    isMuted: channel.isMuted,
+                    muteExpiration: channel.muteExpiration,
+                    lastMessage: channel.lastMessage ? {
+                        id: channel.lastMessage.id._serialized,
+                        body: channel.lastMessage.body,
+                        timestamp: channel.lastMessage.timestamp,
+                        fromMe: channel.lastMessage.fromMe
+                    } : null,
+                    type: channel.isReadOnly ? 'subscriber' : 'admin'
+                }));
+        }
+        
+        res.json({
+            channels,
+            total: channels.length,
+            method: method,
+            timestamp: new Date().toISOString()
+        });
+    } catch (err) {
+        console.error('Failed to fetch enhanced channels:', err);
+        res.status(500).json({ error: 'Failed to fetch enhanced channels', details: err.message });
     }
 });
 
@@ -2961,35 +3716,55 @@ app.post('/api/bulk-retry/:filename', async (req, res) => {
                     ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
                     : normalizedNumber;
                 
-                // Check if contact exists and add if needed
-                let contactExists = false;
-                let existingContact = null;
+                // Check if this is a group (ends with @g.us)
+                const isGroup = chatId.endsWith('@g.us');
                 
-                try {
-                    existingContact = await client.getContactById(chatId);
-                    if (existingContact && existingContact.isMyContact) {
-                        // Check if contact has proper name
-                        const hasProperName = existingContact.name && 
-                                            existingContact.name !== 'undefined' && 
-                                            existingContact.name !== undefined && 
-                                            existingContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
-                                            existingContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
-                        
-                        if (hasProperName) {
-                            console.log(`[BULK RETRY] Contact exists with proper name for ${normalizedNumber}: ${existingContact.name}`);
-                            contactExists = true;
-                        } else {
-                            console.log(`[BULK RETRY] Contact exists but needs name update for ${normalizedNumber}: ${existingContact.name}`);
+                // For groups, verify we can access the group chat
+                if (isGroup) {
+                    try {
+                        const groupChat = await client.getChatById(chatId);
+                        if (!groupChat) {
+                            throw new Error(`Cannot access group ${chatId}. Account may not be a member.`);
                         }
-                    } else {
-                        console.log(`[BULK RETRY] Contact does not exist for ${normalizedNumber}, adding...`);
+                        console.log(`[BULK RETRY] Group verified: ${groupChat.name || chatId}`);
+                        // Skip contact addition for groups
+                    } catch (groupErr) {
+                        console.error(`[BULK RETRY] Group verification failed for ${chatId}:`, groupErr.message);
+                        message.status = 'failed';
+                        message.error = `Failed to verify group access: ${groupErr.message}`;
+                        failCount++;
+                        continue; // Skip to next message
                     }
-                } catch (err) {
-                    console.log(`[BULK RETRY] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
-                }
-                
-                // Add contact if it doesn't exist or needs name update
-                if (!contactExists) {
+                } else {
+                    // For individual contacts, check if contact exists and add if needed
+                    let contactExists = false;
+                    let existingContact = null;
+                    
+                    try {
+                        existingContact = await client.getContactById(chatId);
+                        if (existingContact && existingContact.isMyContact) {
+                            // Check if contact has proper name
+                            const hasProperName = existingContact.name && 
+                                                existingContact.name !== 'undefined' && 
+                                                existingContact.name !== undefined && 
+                                                existingContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
+                                                existingContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
+                            
+                            if (hasProperName) {
+                                console.log(`[BULK RETRY] Contact exists with proper name for ${normalizedNumber}: ${existingContact.name}`);
+                                contactExists = true;
+                            } else {
+                                console.log(`[BULK RETRY] Contact exists but needs name update for ${normalizedNumber}: ${existingContact.name}`);
+                            }
+                        } else {
+                            console.log(`[BULK RETRY] Contact does not exist for ${normalizedNumber}, adding...`);
+                        }
+                    } catch (err) {
+                        console.log(`[BULK RETRY] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
+                    }
+                    
+                    // Add contact if it doesn't exist or needs name update
+                    if (!contactExists) {
                     try {
                         // Generate name if not available
                         let firstName = '';
@@ -3055,6 +3830,7 @@ app.post('/api/bulk-retry/:filename', async (req, res) => {
                         message.error = `Failed to add number to contacts before sending bulk message: ${addErr.message}`;
                         failCount++;
                         continue; // Skip to next message
+                    }
                     }
                 }
                 
@@ -3444,6 +4220,27 @@ app.get('/api/detected-channels', (req, res) => {
     }
 });
 
+// Manual channel discovery endpoint
+app.post('/api/channels/discover', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
+    
+    try {
+        console.log('[API] Manual channel discovery requested');
+        await discoverChannels();
+        const channels = getDetectedChannels();
+        
+        res.json({
+            success: true,
+            message: 'Channel discovery completed',
+            channels: channels.length,
+            discovered: channels
+        });
+    } catch (err) {
+        console.error('Failed to discover channels:', err);
+        res.status(500).json({ error: 'Failed to discover channels', details: err.message });
+    }
+});
+
 // Get leads data
 app.get('/api/leads', (req, res) => {
     try {
@@ -3553,8 +4350,71 @@ app.post('/api/gemini/chat', async (req, res) => {
 // Proxy endpoint for external leads API (to avoid CORS issues)
 app.post('/api/proxy/leads', async (req, res) => {
     try {
-        const apiUrl = 'https://dashboard.geosquare.in/api/get_registrations';
-        const apiKey = 'GEOREG25URSECRET';
+        const apiUrl = process.env.LEADS_API_URL;
+        const apiKey = process.env.LEADS_API_KEY;
+
+        if (!apiUrl || !apiKey) {
+            return res.status(500).json({ 
+                error: 'Leads API configuration missing', 
+                details: 'LEADS_API_URL and LEADS_API_KEY environment variables must be set in .env file',
+                configuration: {
+                    required: [
+                        'LEADS_API_URL=https://your-api-endpoint.com/api/leads',
+                        'LEADS_API_KEY=your-api-key-here'
+                    ],
+                    sampleFormat: {
+                        "success": true,
+                        "data": [
+                            {
+                                "id": 1,
+                                "name": "John Doe",
+                                "phone": "+1234567890",
+                                "email": "john@example.com",
+                                "location": "New York",
+                                "status": "active",
+                                "created_at": "2025-01-27T10:00:00Z"
+                            },
+                            {
+                                "id": 2,
+                                "name": "Jane Smith",
+                                "phone": "+1234567891",
+                                "email": "jane@example.com",
+                                "location": "Los Angeles",
+                                "status": "pending",
+                                "created_at": "2025-01-27T11:00:00Z"
+                            },
+                            {
+                                "id": 3,
+                                "name": "Bob Johnson",
+                                "phone": "+1234567892",
+                                "email": "bob@example.com",
+                                "location": "Chicago",
+                                "status": "active",
+                                "created_at": "2025-01-27T12:00:00Z"
+                            },
+                            {
+                                "id": 4,
+                                "name": "Alice Brown",
+                                "phone": "+1234567893",
+                                "email": "alice@example.com",
+                                "location": "Houston",
+                                "status": "inactive",
+                                "created_at": "2025-01-27T13:00:00Z"
+                            },
+                            {
+                                "id": 5,
+                                "name": "Charlie Wilson",
+                                "phone": "+1234567894",
+                                "email": "charlie@example.com",
+                                "location": "Phoenix",
+                                "status": "active",
+                                "created_at": "2025-01-27T14:00:00Z"
+                            }
+                        ]
+                    }
+                }
+            });
+        }
 
         const response = await fetch(apiUrl, {
             method: 'POST',
@@ -4751,6 +5611,278 @@ app.post('/api/channel/:channelId/sync-web', async (req, res) => {
             message: error.message,
             channelId: channelId
         });
+    }
+});
+
+// ===== CLOUD SECTION API ENDPOINTS =====
+
+// Get Cloudflare connection status (checks log files for current session)
+app.get('/api/cloud/status', (req, res) => {
+    try {
+        const baseUrl = process.env.CLOUDFLARE_BASE_URL || null;
+        const hasConfig = !!(process.env.CLOUDFLARE_BASE_URL && process.env.CLOUDFLARE_API_KEY);
+        
+        // Check log files for connection status in current session
+        let isConnectedFromLogs = false;
+        let connectionTimestamp = null;
+        
+        try {
+            let allLogs = [];
+            let fileIndex = 0;
+            const baseName = CLOUDFLARE_LOGS_FILE.replace('.json', '');
+            
+            // Read all rotated log files
+            while (true) {
+                let logFile;
+                if (fileIndex === 0) {
+                    logFile = CLOUDFLARE_LOGS_FILE;
+                } else {
+                    logFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
+                }
+                
+                if (!fs.existsSync(logFile)) {
+                    break;
+                }
+                
+                try {
+                    const fileContent = fs.readFileSync(logFile, 'utf8');
+                    if (fileContent.trim()) {
+                        const fileLogs = JSON.parse(fileContent);
+                        if (Array.isArray(fileLogs)) {
+                            allLogs = allLogs.concat(fileLogs);
+                        }
+                    }
+                } catch (e) {
+                    // Skip corrupted files
+                }
+                
+                fileIndex++;
+                if (fileIndex > 100) break; // Safety limit
+            }
+            
+            // Find the most recent connection log entry
+            const connectionLogs = allLogs.filter(log => 
+                log.type === 'connection' && 
+                (log.status === 'connected' || log.status === 'failed')
+            );
+            
+            if (connectionLogs.length > 0) {
+                // Sort by timestamp (most recent first)
+                connectionLogs.sort((a, b) => {
+                    const timeA = new Date(a.timestamp || 0).getTime();
+                    const timeB = new Date(b.timestamp || 0).getTime();
+                    return timeB - timeA;
+                });
+                
+                const latestLog = connectionLogs[0];
+                isConnectedFromLogs = latestLog.status === 'connected';
+                connectionTimestamp = latestLog.timestamp;
+            }
+        } catch (logErr) {
+            console.error('[CLOUD] Error reading logs for status:', logErr.message);
+        }
+        
+        // Also check current client status
+        const isConnectedFromClient = cloudflareClient && cloudflareClient.isConnected;
+        
+        // Use log file status if available, otherwise fall back to client status
+        const isConnected = isConnectedFromLogs || isConnectedFromClient;
+        
+        res.json({
+            connected: isConnected,
+            hasConfig,
+            baseUrl,
+            standaloneMode,
+            connectionTimestamp,
+            syncInterval: cloudflareClient ? cloudflareClient.syncInterval : null,
+            queueProcessInterval: cloudflareClient ? cloudflareClient.queueProcessInterval : null
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to get Cloudflare status', details: err.message });
+    }
+});
+
+// Get Cloudflare sync logs (handles rotated log files)
+app.get('/api/cloud/logs', (req, res) => {
+    try {
+        let allLogs = [];
+        let fileIndex = 0;
+        const baseName = CLOUDFLARE_LOGS_FILE.replace('.json', '');
+        
+        // Read all rotated log files
+        while (true) {
+            let logFile;
+            if (fileIndex === 0) {
+                logFile = CLOUDFLARE_LOGS_FILE;
+            } else {
+                logFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
+            }
+            
+            if (!fs.existsSync(logFile)) {
+                break;
+            }
+            
+            try {
+                const fileContent = fs.readFileSync(logFile, 'utf8');
+                if (fileContent.trim()) {
+                    const fileLogs = JSON.parse(fileContent);
+                    if (Array.isArray(fileLogs)) {
+                        allLogs = allLogs.concat(fileLogs);
+                    }
+                }
+            } catch (e) {
+                console.error(`[CLOUD] Failed to read log file ${logFile}:`, e.message);
+            }
+            
+            fileIndex++;
+            if (fileIndex > 100) break; // Safety limit
+        }
+        
+        // Sort by timestamp (most recent first)
+        allLogs.sort((a, b) => {
+            const timeA = new Date(a.timestamp || 0).getTime();
+            const timeB = new Date(b.timestamp || 0).getTime();
+            return timeB - timeA;
+        });
+        
+        // Pagination
+        const page = parseInt(req.query.page) || 1;
+        const pageSize = parseInt(req.query.pageSize) || 50;
+        const start = (page - 1) * pageSize;
+        const end = start + pageSize;
+        
+        res.json({
+            logs: allLogs.slice(start, end),
+            total: allLogs.length,
+            page,
+            pageSize,
+            totalPages: Math.ceil(allLogs.length / pageSize),
+            totalFiles: fileIndex
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to get Cloudflare logs', details: err.message });
+    }
+});
+
+// Get Cloudflare messages (sent via gateway, handles rotated files)
+app.get('/api/cloud/messages', (req, res) => {
+    try {
+        let allMessages = [];
+        let fileIndex = 0;
+        const baseName = CLOUDFLARE_MESSAGES_FILE.replace('.json', '');
+        
+        // Read all rotated message files
+        while (true) {
+            let messageFile;
+            if (fileIndex === 0) {
+                messageFile = CLOUDFLARE_MESSAGES_FILE;
+            } else {
+                messageFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
+            }
+            
+            if (!fs.existsSync(messageFile)) {
+                break;
+            }
+            
+            try {
+                const fileContent = fs.readFileSync(messageFile, 'utf8');
+                if (fileContent.trim()) {
+                    const fileMessages = JSON.parse(fileContent);
+                    if (Array.isArray(fileMessages)) {
+                        allMessages = allMessages.concat(fileMessages);
+                    }
+                }
+            } catch (e) {
+                console.error(`[CLOUD] Failed to read message file ${messageFile}:`, e.message);
+            }
+            
+            fileIndex++;
+            if (fileIndex > 100) break; // Safety limit
+        }
+        
+        // Sort by timestamp (most recent first)
+        allMessages.sort((a, b) => {
+            const timeA = new Date(a.timestamp || a.sentAt || 0).getTime();
+            const timeB = new Date(b.timestamp || b.sentAt || 0).getTime();
+            return timeB - timeA;
+        });
+        
+        // Pagination
+        const page = parseInt(req.query.page) || 1;
+        const pageSize = parseInt(req.query.pageSize) || 50;
+        const start = (page - 1) * pageSize;
+        const end = start + pageSize;
+        
+        res.json({
+            messages: allMessages.slice(start, end),
+            total: allMessages.length,
+            page,
+            pageSize,
+            totalPages: Math.ceil(allMessages.length / pageSize),
+            totalFiles: fileIndex
+        });
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to get Cloudflare messages', details: err.message });
+    }
+});
+
+// Get queued messages from Cloudflare
+app.get('/api/cloud/queue', async (req, res) => {
+    try {
+        if (!cloudflareClient || !cloudflareClient.isConnected) {
+            return res.json({ queue: [], total: 0, connected: false });
+        }
+        
+        const userInfo = getUserIdentifier();
+        const queuedMessages = await cloudflareClient.getQueuedMessages(userInfo ? userInfo.id : null);
+        
+        res.json({
+            queue: queuedMessages || [],
+            total: queuedMessages ? queuedMessages.length : 0,
+            connected: true
+        });
+    } catch (err) {
+        console.error('[CLOUD] Failed to get queue:', err);
+        res.status(500).json({ error: 'Failed to get queue', details: err.message });
+    }
+});
+
+// Get channel web links
+app.get('/api/cloud/channels', async (req, res) => {
+    try {
+        if (!cloudflareClient || !cloudflareClient.isConnected) {
+            return res.json({ channels: [], connected: false });
+        }
+        
+        // Get detected channels
+        let channels = [];
+        if (fs.existsSync(DETECTED_CHANNELS_FILE)) {
+            try {
+                const detectedChannels = JSON.parse(fs.readFileSync(DETECTED_CHANNELS_FILE, 'utf8'));
+                channels = Array.isArray(detectedChannels) ? detectedChannels : [];
+            } catch (e) {
+                channels = [];
+            }
+        }
+        
+        const baseUrl = process.env.CLOUDFLARE_BASE_URL || '';
+        const channelLinks = channels.map(channel => ({
+            id: channel.id,
+            name: channel.name || channel.id,
+            type: channel.type || 'channel',
+            webUrl: `${baseUrl}/channel/${encodeURIComponent(channel.id)}`,
+            lastSeen: channel.lastSeen || null
+        }));
+        
+        res.json({
+            channels: channelLinks,
+            total: channelLinks.length,
+            baseUrl,
+            connected: true
+        });
+    } catch (err) {
+        console.error('[CLOUD] Failed to get channels:', err);
+        res.status(500).json({ error: 'Failed to get channels', details: err.message });
     }
 });
 

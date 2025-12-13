@@ -28,10 +28,12 @@ export class WhatsAppDataStore {
 
   // User Management Methods
   async registerUser(userId, userInfo) {
+    // Extract phone number from userId (remove @c.us or @g.us) as default name
+    const phoneNumber = userId.replace('@c.us', '').replace('@g.us', '');
     const userData = {
       id: userId,
-      name: userInfo.name || 'Unknown User',
-      phone: userInfo.phone || userId.replace('@c.us', ''),
+      name: userInfo.name || phoneNumber, // Use phone number as default instead of 'Unknown User'
+      phone: userInfo.phone || phoneNumber,
       platform: userInfo.platform || 'web',
       lastSeen: new Date().toISOString(),
       isActive: true,
@@ -371,7 +373,7 @@ export class WhatsAppDataStore {
   // Queue a message for sending
   async queueMessage(request) {
     const data = await request.json();
-    const { to, message, media, priority = 'normal', from, contactName } = data;
+    const { to, message, media, priority = 'normal', from, contactName, senderName, userName } = data;
 
     if (!to || !message) {
       return new Response(JSON.stringify({ error: 'to and message are required' }), {
@@ -392,9 +394,31 @@ export class WhatsAppDataStore {
         });
       }
       
+      // Extract phone number from from field (remove @c.us part) for use as default name
+      const phoneNumber = from.replace('@c.us', '').replace('@g.us', '');
+      
       // Register user if provided and not already registered
+      // Support both senderName and userName for sender identification
+      // If not provided, use phone number as default name
+      const senderDisplayName = senderName || userName || phoneNumber;
       if (!this.activeUsers.has(from)) {
-        await this.registerUser(from, { id: from });
+        await this.registerUser(from, { 
+          id: from,
+          name: senderDisplayName
+        });
+      } else {
+        // Update existing user's name if:
+        // 1. Explicit senderName/userName provided, OR
+        // 2. Current name is "Unknown User" (migrate to phone number)
+        const existingUser = this.activeUsers.get(from);
+        if (existingUser) {
+          const shouldUpdate = (senderName || userName) || (existingUser.name === 'Unknown User');
+          if (shouldUpdate) {
+            existingUser.name = senderDisplayName;
+            this.activeUsers.set(from, existingUser);
+            await this.state.storage.put('activeUsers', this.activeUsers);
+          }
+        }
       }
     }
 
@@ -411,15 +435,37 @@ export class WhatsAppDataStore {
       attempts: 0
     };
 
-    // Store in user-specific queue
-    const userQueueKey = `messageQueue_${queuedMessage.from}`;
-    const userQueue = await this.state.storage.get(userQueueKey) || [];
-    userQueue.push(queuedMessage);
-    await this.state.storage.put(userQueueKey, userQueue);
+    // Store message individually to avoid size limits
+    await this.state.storage.put(`message_${queuedMessage.id}`, queuedMessage);
 
-    // Also maintain global queue for backward compatibility
-    this.messageQueue.push(queuedMessage);
-    await this.state.storage.put('messageQueue', this.messageQueue);
+    // Store in user-specific queue (only store IDs to keep size small)
+    const userQueueKey = `messageQueue_${queuedMessage.from}`;
+    const userQueueIds = await this.state.storage.get(userQueueKey) || [];
+    if (!userQueueIds.includes(queuedMessage.id)) {
+      userQueueIds.push(queuedMessage.id);
+      // Keep only last 1000 message IDs per user to prevent unbounded growth
+      if (userQueueIds.length > 1000) {
+        const oldIds = userQueueIds.splice(0, userQueueIds.length - 1000);
+        // Clean up old messages
+        for (const oldId of oldIds) {
+          await this.state.storage.delete(`message_${oldId}`);
+        }
+      }
+      await this.state.storage.put(userQueueKey, userQueueIds);
+    }
+
+    // Also maintain global queue IDs for backward compatibility (limit to 1000)
+    const globalQueueIds = await this.state.storage.get('messageQueueIds') || [];
+    if (!globalQueueIds.includes(queuedMessage.id)) {
+      globalQueueIds.push(queuedMessage.id);
+      if (globalQueueIds.length > 1000) {
+        const oldIds = globalQueueIds.splice(0, globalQueueIds.length - 1000);
+        for (const oldId of oldIds) {
+          await this.state.storage.delete(`message_${oldId}`);
+        }
+      }
+      await this.state.storage.put('messageQueueIds', globalQueueIds);
+    }
 
     // Update user activity
     if (from) {
@@ -427,11 +473,22 @@ export class WhatsAppDataStore {
     }
 
     // Enhanced logging with user distinction
-    const userDisplay = from ? `User: ${this.activeUsers.get(from)?.name || from}` : 'Anonymous User';
+    // Use user's name if available, otherwise extract phone number from from field
+    let userDisplay = 'Anonymous User';
+    if (from && from !== 'anonymous') {
+      const userData = this.activeUsers.get(from);
+      if (userData && userData.name) {
+        userDisplay = `User: ${userData.name}`;
+      } else {
+        // Extract phone number (remove @c.us or @g.us) as fallback
+        const phoneNumber = from.replace('@c.us', '').replace('@g.us', '');
+        userDisplay = `User: ${phoneNumber}`;
+      }
+    }
     console.log(`[MESSAGE-QUEUE] ${userDisplay} queued message to ${to}`);
     console.log(`[MESSAGE-QUEUE] Message ID: ${queuedMessage.id}`);
     console.log(`[MESSAGE-QUEUE] Priority: ${priority}`);
-    console.log(`[MESSAGE-QUEUE] User Queue Length: ${userQueue.length}`);
+    console.log(`[MESSAGE-QUEUE] User Queue Length: ${userQueueIds.length}`);
 
     // Trigger webhook notification for immediate processing
     await this.triggerWebhook('message_queued', {
@@ -439,7 +496,7 @@ export class WhatsAppDataStore {
       to: queuedMessage.to,
       priority: queuedMessage.priority,
       from: queuedMessage.from,
-      queueLength: userQueue.length,
+      queueLength: userQueueIds.length,
       userDisplay: userDisplay
     });
 
@@ -459,17 +516,33 @@ export class WhatsAppDataStore {
     const url = new URL(request.url);
     const from = url.searchParams.get('from');
     
-    let pendingMessages;
+    let messageIds = [];
     
     if (from) {
-      // Get user-specific messages
+      // Get user-specific message IDs
       const userQueueKey = `messageQueue_${from}`;
-      const userQueue = await this.state.storage.get(userQueueKey) || [];
-      pendingMessages = userQueue.filter(msg => msg.status === 'queued');
+      messageIds = await this.state.storage.get(userQueueKey) || [];
     } else {
-      // Get all messages (backward compatibility)
-      pendingMessages = this.messageQueue.filter(msg => msg.status === 'queued');
+      // Get all message IDs (backward compatibility)
+      messageIds = await this.state.storage.get('messageQueueIds') || [];
     }
+    
+    // Fetch messages individually
+    const pendingMessages = [];
+    for (const msgId of messageIds) {
+      const message = await this.state.storage.get(`message_${msgId}`);
+      if (message && message.status === 'queued') {
+        pendingMessages.push(message);
+      }
+    }
+    
+    // Sort by priority and creation time
+    pendingMessages.sort((a, b) => {
+      const priorityOrder = { high: 3, normal: 2, low: 1 };
+      const priorityDiff = (priorityOrder[b.priority] || 2) - (priorityOrder[a.priority] || 2);
+      if (priorityDiff !== 0) return priorityDiff;
+      return new Date(a.createdAt) - new Date(b.createdAt);
+    });
     
     return new Response(JSON.stringify({
       success: true,
@@ -499,36 +572,38 @@ export class WhatsAppDataStore {
     let processedCount = 0;
 
     for (const processedMsg of processedMessages) {
-      // Update in global queue
-      const messageIndex = this.messageQueue.findIndex(msg => msg.id === processedMsg.id);
-      if (messageIndex !== -1) {
-        this.messageQueue[messageIndex] = {
-          ...this.messageQueue[messageIndex],
+      // Update individual message storage
+      const message = await this.state.storage.get(`message_${processedMsg.id}`);
+      if (message) {
+        const updatedMessage = {
+          ...message,
           status: processedMsg.status,
           sentAt: processedMsg.sentAt || new Date().toISOString(),
           error: processedMsg.error
         };
+        await this.state.storage.put(`message_${processedMsg.id}`, updatedMessage);
         processedCount++;
-      }
 
-      // Update in user-specific queue if from provided
-      if (from) {
-        const userQueueKey = `messageQueue_${from}`;
-        const userQueue = await this.state.storage.get(userQueueKey) || [];
-        const userMessageIndex = userQueue.findIndex(msg => msg.id === processedMsg.id);
-        if (userMessageIndex !== -1) {
-          userQueue[userMessageIndex] = {
-            ...userQueue[userMessageIndex],
-            status: processedMsg.status,
-            sentAt: processedMsg.sentAt || new Date().toISOString(),
-            error: processedMsg.error
-          };
-          await this.state.storage.put(userQueueKey, userQueue);
+        // If message is sent or failed, remove from queue IDs after 24 hours
+        if (processedMsg.status === 'sent' || processedMsg.status === 'failed') {
+          // Remove from user-specific queue IDs
+          if (from) {
+            const userQueueKey = `messageQueue_${from}`;
+            const userQueueIds = await this.state.storage.get(userQueueKey) || [];
+            const filteredIds = userQueueIds.filter(id => id !== processedMsg.id);
+            await this.state.storage.put(userQueueKey, filteredIds);
+          }
+
+          // Remove from global queue IDs
+          const globalQueueIds = await this.state.storage.get('messageQueueIds') || [];
+          const filteredGlobalIds = globalQueueIds.filter(id => id !== processedMsg.id);
+          await this.state.storage.put('messageQueueIds', filteredGlobalIds);
+
+          // Optionally delete old messages after 7 days (keep for history)
+          // For now, we keep them but they won't appear in queue queries
         }
       }
     }
-
-    await this.state.storage.put('messageQueue', this.messageQueue);
 
     return new Response(JSON.stringify({
       success: true,
@@ -1376,6 +1451,16 @@ export class WhatsAppDataStore {
 
   // Get system status
   async getStatus() {
+    // Count queued messages from IDs
+    const globalQueueIds = await this.state.storage.get('messageQueueIds') || [];
+    let queuedCount = 0;
+    for (const msgId of globalQueueIds) {
+      const message = await this.state.storage.get(`message_${msgId}`);
+      if (message && message.status === 'queued') {
+        queuedCount++;
+      }
+    }
+
     return new Response(JSON.stringify({
       success: true,
       status: {
@@ -1384,7 +1469,7 @@ export class WhatsAppDataStore {
         messages: this.messages.size,
         channels: this.channels.size,
         channelMessages: Array.from(this.channelMessages.values()).reduce((total, msgs) => total + msgs.length, 0),
-        queuedMessages: this.messageQueue.filter(msg => msg.status === 'queued').length,
+        queuedMessages: queuedCount,
         lastSync: this.lastSync
       }
     }), {

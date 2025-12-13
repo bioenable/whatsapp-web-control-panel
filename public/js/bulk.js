@@ -14,7 +14,8 @@
     const bulkImportFilter = document.getElementById('bulk-import-filter');
     const bulkDeleteBtn = document.getElementById('bulk-delete-btn');
     const bulkCancelBtn = document.getElementById('bulk-cancel-btn');
-const bulkRetryBtn = document.getElementById('bulk-retry-btn');
+    const bulkRetryBtn = document.getElementById('bulk-retry-btn');
+    const bulkShowPastBtn = document.getElementById('bulk-show-past-btn');
     const bulkPrevPage = document.getElementById('bulk-prev-page');
     const bulkNextPage = document.getElementById('bulk-next-page');
     const bulkPageInfo = document.getElementById('bulk-page-info');
@@ -53,15 +54,16 @@ const bulkRetryBtn = document.getElementById('bulk-retry-btn');
     let bulkTimezone = 'Asia/Kolkata';
     let bulkNow = new Date();
     let bulkTestDropdown;
+    let showPastRecords = false;
 
     // Initialize Bulk Tab
     function initBulkTab() {
         if (!bulkImportForm) return;
 
         // Set up event listeners
-        const bulkTabBtn = document.getElementById('bulk-tab');
-        if (bulkTabBtn) {
-            bulkTabBtn.addEventListener('click', () => {
+        const bulkSubTabBtn = document.getElementById('bulk-sub-tab');
+        if (bulkSubTabBtn) {
+            bulkSubTabBtn.addEventListener('click', () => {
                 bulkPage = 1;
                 loadBulkImports();
                 loadBulkImportFilenames();
@@ -82,6 +84,17 @@ const bulkRetryBtn = document.getElementById('bulk-retry-btn');
         if (bulkDeleteBtn) bulkDeleteBtn.addEventListener('click', handleBulkDelete);
         if (bulkCancelBtn) bulkCancelBtn.addEventListener('click', handleBulkCancel);
         if (bulkRetryBtn) bulkRetryBtn.addEventListener('click', handleBulkRetry);
+        if (bulkShowPastBtn) {
+            bulkShowPastBtn.addEventListener('click', () => {
+                showPastRecords = !showPastRecords;
+                bulkShowPastBtn.textContent = showPastRecords ? 'Hide Past Records' : 'Show Past Records';
+                bulkShowPastBtn.className = showPastRecords 
+                    ? 'bg-gray-700 text-white px-3 py-1 rounded hover:bg-gray-800 text-xs'
+                    : 'bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700 text-xs';
+                bulkPage = 1;
+                loadBulkImports();
+            });
+        }
         
         if (bulkPrevPage) {
             bulkPrevPage.addEventListener('click', () => {
@@ -264,14 +277,29 @@ const bulkRetryBtn = document.getElementById('bulk-retry-btn');
 
     // Load Bulk Imports
     function loadBulkImports() {
-        let url = `/api/bulk?page=${bulkPage}&limit=${bulkLimit}`;
+        // Use bulk-imports endpoint which supports filtering by import_filename
+        let url = `/api/bulk-imports?page=1&limit=10000`; // Get all records for sorting
         if (bulkCurrentImport) url += `&import_filename=${encodeURIComponent(bulkCurrentImport)}`;
         
         fetch(url)
             .then(res => res.json())
             .then(data => {
-                bulkRecords = data.records;
-                bulkTotal = data.total;
+                let allRecords = data.records;
+                
+                // Get today's date range (start and end of today)
+                const now = new Date();
+                const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+                const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+                
+                // Sort and filter records
+                const sortedRecords = sortBulkRecords(allRecords, todayStart, todayEnd);
+                
+                // Apply pagination to sorted records
+                const startIndex = (bulkPage - 1) * bulkLimit;
+                const endIndex = startIndex + bulkLimit;
+                bulkRecords = sortedRecords.slice(startIndex, endIndex);
+                bulkTotal = sortedRecords.length;
+                
                 renderBulkList();
                 updateBulkPagination();
             })
@@ -280,6 +308,53 @@ const bulkRetryBtn = document.getElementById('bulk-retry-btn');
                     bulkListContainer.innerHTML = `<div class="text-red-600">Failed to load records: ${escapeHtml(err.message)}</div>`;
                 }
             });
+    }
+
+    // Sort Bulk Records: Today first, then future, then past (if enabled)
+    function sortBulkRecords(records, todayStart, todayEnd) {
+        const todayRecords = [];
+        const futureRecords = [];
+        const pastRecords = [];
+        
+        records.forEach(record => {
+            if (!record.send_datetime) {
+                // If no send_datetime, treat as future
+                futureRecords.push(record);
+                return;
+            }
+            
+            const sendDate = new Date(record.send_datetime);
+            
+            if (sendDate >= todayStart && sendDate <= todayEnd) {
+                // Today's records
+                todayRecords.push(record);
+            } else if (sendDate > todayEnd) {
+                // Future records
+                futureRecords.push(record);
+            } else {
+                // Past records
+                pastRecords.push(record);
+            }
+        });
+        
+        // Sort each group by send_datetime
+        const sortByDate = (a, b) => {
+            const dateA = new Date(a.send_datetime || 0);
+            const dateB = new Date(b.send_datetime || 0);
+            return dateA - dateB;
+        };
+        
+        todayRecords.sort(sortByDate);
+        futureRecords.sort(sortByDate);
+        pastRecords.sort(sortByDate);
+        
+        // Combine: today first, then future, then past (if enabled)
+        let sorted = [...todayRecords, ...futureRecords];
+        if (showPastRecords) {
+            sorted = [...sorted, ...pastRecords];
+        }
+        
+        return sorted;
     }
 
     // Render Bulk List
@@ -350,7 +425,7 @@ const bulkRetryBtn = document.getElementById('bulk-retry-btn');
 
     // Load Bulk Import Filenames
     function loadBulkImportFilenames() {
-        fetch('/api/bulk?page=1&limit=10000')
+        fetch('/api/bulk-imports?page=1&limit=10000')
             .then(res => res.json())
             .then(data => {
                 if (bulkImportFilter) {

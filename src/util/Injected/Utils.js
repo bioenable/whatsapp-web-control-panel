@@ -640,20 +640,22 @@ exports.LoadUtils = () => {
             res.businessProfile = contact.businessProfile.serialize();
         }
 
-        res.isMe = window.Store.ContactMethods.getIsMe(contact);
-        res.isUser = window.Store.ContactMethods.getIsUser(contact);
-        res.isGroup = window.Store.ContactMethods.getIsGroup(contact);
-        res.isWAContact = window.Store.ContactMethods.getIsWAContact(contact);
-        res.isMyContact = window.Store.ContactMethods.getIsMyContact(contact);
-        res.isBlocked = contact.isContactBlocked;
-        res.userid = window.Store.ContactMethods.getUserid(contact);
-        res.isEnterprise = window.Store.ContactMethods.getIsEnterprise(contact);
-        res.verifiedName = window.Store.ContactMethods.getVerifiedName(contact);
-        res.verifiedLevel = window.Store.ContactMethods.getVerifiedLevel(contact);
-        res.statusMute = window.Store.ContactMethods.getStatusMute(contact);
-        res.name = window.Store.ContactMethods.getName(contact);
-        res.shortName = window.Store.ContactMethods.getShortName(contact);
-        res.pushname = window.Store.ContactMethods.getPushname(contact);
+        // Safely call ContactMethods functions, with fallbacks if methods don't exist
+        const ContactMethods = window.Store.ContactMethods || {};
+        res.isMe = ContactMethods.getIsMe ? ContactMethods.getIsMe(contact) : (contact.isMe || false);
+        res.isUser = ContactMethods.getIsUser ? ContactMethods.getIsUser(contact) : (contact.isUser || false);
+        res.isGroup = ContactMethods.getIsGroup ? ContactMethods.getIsGroup(contact) : (contact.isGroup || false);
+        res.isWAContact = ContactMethods.getIsWAContact ? ContactMethods.getIsWAContact(contact) : (contact.isWAContact || false);
+        res.isMyContact = ContactMethods.getIsMyContact ? ContactMethods.getIsMyContact(contact) : (contact.isMyContact || contact.isContact || false);
+        res.isBlocked = contact.isContactBlocked || false;
+        res.userid = ContactMethods.getUserid ? ContactMethods.getUserid(contact) : (contact.id?.user || contact.userid || '');
+        res.isEnterprise = ContactMethods.getIsEnterprise ? ContactMethods.getIsEnterprise(contact) : (contact.isEnterprise || false);
+        res.verifiedName = ContactMethods.getVerifiedName ? ContactMethods.getVerifiedName(contact) : (contact.verifiedName || null);
+        res.verifiedLevel = ContactMethods.getVerifiedLevel ? ContactMethods.getVerifiedLevel(contact) : (contact.verifiedLevel || null);
+        res.statusMute = ContactMethods.getStatusMute ? ContactMethods.getStatusMute(contact) : (contact.statusMute || false);
+        res.name = ContactMethods.getName ? ContactMethods.getName(contact) : (contact.name || contact.pushname || null);
+        res.shortName = ContactMethods.getShortName ? ContactMethods.getShortName(contact) : (contact.shortName || res.name || null);
+        res.pushname = ContactMethods.getPushname ? ContactMethods.getPushname(contact) : (contact.pushname || null);
 
         return res;
     };

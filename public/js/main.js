@@ -73,8 +73,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Templates Tab Logic ---
     if (templatesTab) {
-        // Load templates when tab is shown
-        document.getElementById('templates-tab').addEventListener('click', loadTemplates);
+        // Load templates when sub-tab is shown
+        const templatesSubTab = document.getElementById('templates-sub-tab');
+        if (templatesSubTab) {
+            templatesSubTab.addEventListener('click', loadTemplates);
+        }
         addTemplateBtn.addEventListener('click', () => openTemplateModal());
         closeTemplateModal.addEventListener('click', closeTemplateModalFn);
         cancelTemplateBtn.addEventListener('click', closeTemplateModalFn);
@@ -86,11 +89,26 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Send Message Tab: Template Integration ---
     if (templateSelect) {
-        document.getElementById('send-tab').addEventListener('click', () => {
-            console.log('Send tab clicked, loading templates and sent messages');
-            populateTemplateSelect();
-            loadSentMessagesLog();
-        });
+        const sendMessageSubTab = document.getElementById('send-message-sub-tab');
+        const messagesTab = document.getElementById('messages-tab');
+        if (sendMessageSubTab) {
+            sendMessageSubTab.addEventListener('click', () => {
+                console.log('Send Message sub-tab clicked, loading templates and sent messages');
+                populateTemplateSelect();
+                loadSentMessagesLog();
+            });
+        }
+        // Also load when Messages tab is clicked and Send Message is the active sub-tab
+        if (messagesTab) {
+            messagesTab.addEventListener('click', () => {
+                // Check if send-message sub-tab is active
+                const sendMessageSubTab = document.getElementById('send-message-sub-tab');
+                if (sendMessageSubTab && sendMessageSubTab.classList.contains('text-green-700')) {
+                    populateTemplateSelect();
+                    loadSentMessagesLog();
+                }
+            });
+        }
         templateSelect.addEventListener('change', handleTemplateSelectChange);
         previewTemplateBtn.addEventListener('click', handlePreviewTemplateBtn);
     }
@@ -159,6 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (chatsTab) {
         chatsTab.addEventListener('click', () => {
             populateChatTemplateSelect();
+            // Always try to load chats when tab is clicked (API will handle if not ready)
+            loadChats();
         });
     }
 
@@ -173,10 +193,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (sentMessagesTable) {
         // Load sent messages when page loads
         loadSentMessagesLog();
-        const sendTabBtn = document.getElementById('send-tab');
-        if (sendTabBtn) {
-            sendTabBtn.addEventListener('click', () => {
-                console.log('Send tab clicked, reloading sent messages');
+        const sendMessageSubTab = document.getElementById('send-message-sub-tab');
+        if (sendMessageSubTab) {
+            sendMessageSubTab.addEventListener('click', () => {
+                console.log('Send Message sub-tab clicked, reloading sent messages');
                 loadSentMessagesLog();
             });
         }
@@ -226,8 +246,8 @@ function setupEventListeners() {
         recipientSelect.addEventListener('change', handleRecipientSelectChange);
     }
     
-    // Load initial data
-    loadChats();
+    // Load initial data only if ready
+    // Chats will be loaded when status becomes ready or when tab is clicked
     loadTemplates();
     
     // Load templates for both tabs initially
@@ -243,7 +263,7 @@ function checkStatus() {
         .then(response => response.json())
         .then(data => {
             currentStatus = data.status;
-            updateStatusIndicator(data.status);
+            updateStatusIndicator(data.status, data.user);
             
             if (data.status === 'qr') {
                 showQRCode(data.qr);
@@ -251,8 +271,12 @@ function checkStatus() {
                 hideQRCode();
             }
             
-            if (data.status === 'ready') {
-                loadChats();
+            if (data.status === 'ready' || data.ready === true) {
+                // Load chats if we haven't loaded them yet or if chat list is empty
+                // Always try to load when status becomes ready (loadChats handles errors)
+                if (!chats || chats.length === 0) {
+                    loadChats();
+                }
             } else {
                 // If not ready, clear chat list
                 if (chatList) chatList.innerHTML = '<div class="text-center text-gray-400 py-4">WhatsApp not connected. Waiting for connection...</div>';
@@ -270,7 +294,7 @@ function checkStatus() {
 }
 
 // Update status indicator
-function updateStatusIndicator(status) {
+function updateStatusIndicator(status, userInfo = null) {
     if (!statusIndicator) return;
     
     const statusText = document.getElementById('status-text');
@@ -288,6 +312,21 @@ function updateStatusIndicator(status) {
     const statusInfo = statusMap[status] || { text: 'Unknown', class: 'bg-gray-500' };
     statusIndicator.className = `inline-block w-3 h-3 rounded-full ${statusInfo.class}`;
     statusText.textContent = statusInfo.text;
+    
+    // Update user info display
+    const userInfoContainer = document.getElementById('user-info-container');
+    const userName = document.getElementById('user-name');
+    const userNumber = document.getElementById('user-number');
+    
+    if (userInfoContainer && userName && userNumber) {
+        if (userInfo && (status === 'ready' || status === 'authenticated')) {
+            userName.textContent = userInfo.name || 'Unknown';
+            userNumber.textContent = `(${userInfo.number})`;
+            userInfoContainer.classList.remove('hidden');
+        } else {
+            userInfoContainer.classList.add('hidden');
+        }
+    }
 }
 
 // Show QR Code
@@ -332,15 +371,41 @@ function hideQRCode() {
 
 // Load chats
 function loadChats() {
+    if (!chatList) {
+        console.error('Chat list element not found');
+        return;
+    }
+    
+    // Show loading state
+    chatList.innerHTML = '<div class="text-center py-4 text-gray-400">Loading chats...</div>';
+    
     fetch('/api/chats')
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                if (response.status === 503) {
+                    throw new Error('WhatsApp client not ready. Please wait...');
+                }
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
+            if (!Array.isArray(data)) {
+                throw new Error('Invalid response format: expected array');
+            }
             chats = data;
+            console.log(`Loaded ${chats.length} chats`);
             renderChatList();
             populateRecipientSelect();
         })
         .catch(error => {
             console.error('Error loading chats:', error);
+            if (chatList) {
+                const errorMsg = error.message.includes('not ready') 
+                    ? '<div class="text-center py-4 text-yellow-600">WhatsApp not ready. Waiting for connection...</div>'
+                    : `<div class="text-center py-4 text-red-500">Error loading chats: ${error.message}</div>`;
+                chatList.innerHTML = errorMsg;
+            }
         });
 }
 
@@ -362,11 +427,18 @@ function renderChatList() {
             phoneNumber = chat.id.replace('@c.us', '');
         }
         
+        // Extract group ID for groups
+        let groupId = '';
+        if (chat.isGroup && chat.id.includes('@g.us')) {
+            groupId = chat.id;
+        }
+        
         chatItem.innerHTML = `
             <div class="flex-1 truncate">
                 <div class="chat-name font-semibold truncate">${escapeHtml(chat.name)}</div>
                 <div class="text-xs text-gray-500">
                     ${chat.isGroup ? 'Group' : 'Private'}
+                    ${groupId ? `<span class="chat-number ml-1">(${escapeHtml(groupId)})</span>` : ''}
                     ${phoneNumber ? `<span class="chat-number ml-1">(${phoneNumber})</span>` : ''}
                 </div>
             </div>
@@ -690,20 +762,79 @@ function renderMessages(messages) {
         messageContainer.innerHTML = '<div class="text-center py-4 text-gray-400">No messages found</div>';
         return;
     }
+    
+    // Get selected chat to check if it's a group
+    const selectedChat = chats.find(c => c.id === selectedChatId);
+    const isGroup = selectedChat ? selectedChat.isGroup : false;
+    
     messageContainer.innerHTML = '';
     const messagesDiv = document.createElement('div');
-    messagesDiv.className = 'flex flex-col gap-2';
+    messagesDiv.className = 'flex flex-col gap-2 p-2';
     messages.forEach(message => {
         const isFromMe = message.fromMe;
         const bubble = document.createElement('div');
-        bubble.className = 'max-w-[70%] px-4 py-2 rounded-lg shadow ' + (isFromMe ? 'bg-green-100 self-end' : 'bg-white self-start');
+        bubble.className = 'flex flex-col max-w-[70%] ' + (isFromMe ? 'self-end items-end' : 'self-start items-start');
+        
+        const messageBubble = document.createElement('div');
+        messageBubble.className = 'px-4 py-2 rounded-lg shadow ' + (isFromMe ? 'bg-green-100' : 'bg-white');
+        
         let content = '';
-        if (message.hasMedia) {
-            content += `<div class='mb-1 text-xs text-green-600'>[Media attachment]</div>`;
+        
+        // Show sender info for group messages (not from me)
+        if (isGroup && !isFromMe && message.senderName) {
+            content += `<div class='text-xs font-semibold text-gray-700 mb-1'>${escapeHtml(message.senderName)}`;
+            if (message.senderNumber && message.senderNumber !== message.senderName) {
+                content += ` <span class='text-gray-500 font-normal'>(${escapeHtml(message.senderNumber)})</span>`;
+            }
+            content += `</div>`;
         }
-        content += `<div>${escapeHtml(message.body)}</div>`;
-        content += `<div class='text-xs text-gray-400 mt-1 text-right'>${new Date(message.timestamp * 1000).toLocaleTimeString()}</div>`;
-        bubble.innerHTML = content;
+        
+        // Show media if present
+        if (message.hasMedia && selectedChatId) {
+            const mediaUrl = `/api/chats/${encodeURIComponent(selectedChatId)}/messages/${encodeURIComponent(message.id)}/media`;
+            const isImage = message.mimetype && message.mimetype.startsWith('image/');
+            const isVideo = message.mimetype && message.mimetype.startsWith('video/');
+            
+            if (isImage) {
+                content += `<div class='mb-2 rounded overflow-hidden max-w-full'>
+                    <img src="${mediaUrl}" alt="Image" class="max-w-full h-auto rounded cursor-pointer" style="max-height: 300px;" 
+                         onclick="window.open('${mediaUrl}', '_blank')"
+                         onerror="this.parentElement.innerHTML='<div class=\'text-xs text-red-600 p-2 bg-red-50 rounded\'>Failed to load image</div>'">
+                </div>`;
+            } else if (isVideo) {
+                content += `<div class='mb-2 rounded overflow-hidden max-w-full'>
+                    <video src="${mediaUrl}" controls class="max-w-full h-auto rounded" style="max-height: 300px;"
+                           onerror="this.parentElement.innerHTML='<div class=\'text-xs text-red-600 p-2 bg-red-50 rounded\'>Failed to load video</div>'">
+                    </video>
+                </div>`;
+            } else {
+                // Other media types (PDF, documents, etc.)
+                const fileIcon = message.mimetype === 'application/pdf' ? 
+                    '<svg class="w-4 h-4" fill="red" viewBox="0 0 24 24"><path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20Z" /></svg>' :
+                    '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l7.07-7.07a4 4 0 00-5.656-5.657l-7.071 7.07a6 6 0 108.485 8.486L20.485 13" /></svg>';
+                content += `<div class='mb-2 p-2 bg-gray-100 rounded'>
+                    <a href="${mediaUrl}" target="_blank" download="${escapeHtml(message.filename || 'media')}" class='text-blue-600 hover:underline text-sm flex items-center gap-1'>
+                        ${fileIcon}
+                        ${escapeHtml(message.filename || 'Download Media')}
+                        ${message.size ? ` <span class='text-gray-500 text-xs'>(${(message.size / 1024).toFixed(1)} KB)</span>` : ''}
+                    </a>
+                </div>`;
+            }
+        } else if (message.hasMedia) {
+            // Fallback if selectedChatId is not available
+            content += `<div class='mb-1 text-xs text-gray-500 italic'>[Media attachment - ${escapeHtml(message.mimetype || 'unknown type')}]</div>`;
+        }
+        
+        // Message body (caption for media or regular text)
+        if (message.body) {
+            content += `<div class='${message.hasMedia ? 'mt-1' : ''}'>${escapeHtml(message.body)}</div>`;
+        }
+        
+        // Timestamp
+        content += `<div class='text-xs text-gray-400 mt-1 ${isFromMe ? 'text-right' : 'text-left'}'>${new Date(message.timestamp * 1000).toLocaleTimeString()}</div>`;
+        
+        messageBubble.innerHTML = content;
+        bubble.appendChild(messageBubble);
         messagesDiv.appendChild(bubble);
     });
     messageContainer.appendChild(messagesDiv);

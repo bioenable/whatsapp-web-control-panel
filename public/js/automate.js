@@ -14,7 +14,6 @@
     const automationForm = document.getElementById('automation-form');
     const automationModalTitle = document.getElementById('automation-modal-title');
     const automationSystemPrompt = document.getElementById('automation-system-prompt');
-    const automationAutoReplyPrompt = document.getElementById('automation-auto-reply-prompt');
     const automationScheduledPrompt = document.getElementById('automation-scheduled-prompt');
     const automationSchedule = document.getElementById('automation-schedule');
     const automationStatus = document.getElementById('automation-status');
@@ -23,7 +22,6 @@
     const automationChannelSelect = document.getElementById('automation-channel-select');
     const automationChatSection = document.getElementById('automation-chat-section');
     const automationChannelSection = document.getElementById('automation-channel-section');
-    const automationAutoReplySection = document.getElementById('automation-auto-reply-section');
     const scheduleOptional = document.getElementById('schedule-optional');
     const scheduleRequired = document.getElementById('schedule-required');
 
@@ -66,20 +64,6 @@
         }
     };
 
-    window.toggleAutoReplyPrompt = function(index) {
-        const content = document.querySelector(`.auto-reply-content-${index}`);
-        const button = document.querySelector(`.show-more-auto-reply-${index}`);
-        
-        if (content.classList.contains('max-h-16')) {
-            content.classList.remove('max-h-16', 'overflow-hidden');
-            content.classList.add('max-h-96', 'overflow-y-auto');
-            button.textContent = 'Show less';
-        } else {
-            content.classList.remove('max-h-96', 'overflow-y-auto');
-            content.classList.add('max-h-16', 'overflow-hidden');
-            button.textContent = 'Show more';
-        }
-    };
 
     // Initialize Automate Tab
     function initAutomateTab() {
@@ -130,16 +114,8 @@
             // Show channel section, hide chat section
             if (automationChannelSection) automationChannelSection.classList.remove('hidden');
             if (automationChatSection) automationChatSection.classList.add('hidden');
-            if (automationAutoReplySection) automationAutoReplySection.classList.add('hidden');
             if (scheduleOptional) scheduleOptional.classList.add('hidden');
             if (scheduleRequired) scheduleRequired.classList.remove('hidden');
-            
-            // Make auto-reply prompt not required for channels and disable it
-            if (automationAutoReplyPrompt) {
-                automationAutoReplyPrompt.removeAttribute('required');
-                automationAutoReplyPrompt.value = '';
-                automationAutoReplyPrompt.disabled = true;
-            }
             
             // Make schedule required for channels
             if (automationSchedule) {
@@ -166,15 +142,8 @@
             // Show chat section, hide channel section
             if (automationChannelSection) automationChannelSection.classList.add('hidden');
             if (automationChatSection) automationChatSection.classList.remove('hidden');
-            if (automationAutoReplySection) automationAutoReplySection.classList.remove('hidden');
             if (scheduleOptional) scheduleOptional.classList.remove('hidden');
             if (scheduleRequired) scheduleRequired.classList.add('hidden');
-            
-            // Make auto-reply prompt required for chats and enable it
-            if (automationAutoReplyPrompt) {
-                automationAutoReplyPrompt.setAttribute('required', 'required');
-                automationAutoReplyPrompt.disabled = false;
-            }
             
             // Make schedule optional for chats
             if (automationSchedule) {
@@ -244,7 +213,6 @@
                 if (automationModalTitle) automationModalTitle.textContent = 'Edit Automation';
                 if (document.getElementById('automation-id')) document.getElementById('automation-id').value = a.id;
                 if (automationSystemPrompt) automationSystemPrompt.value = a.systemPrompt;
-                if (automationAutoReplyPrompt) automationAutoReplyPrompt.value = a.autoReplyPrompt;
                 if (automationSchedule) automationSchedule.value = a.schedule ? JSON.stringify(a.schedule) : '';
                 if (automationStatus) automationStatus.value = a.status || 'active';
                 
@@ -307,13 +275,20 @@
     }
 
     function openAutomationLogModal(id) {
+        console.log(`[AUTOMATION] Opening log modal for ID: ${id}`);
+        
         // Find the automation container and check if logs are already expanded
         const automationContainer = document.querySelector(`[data-automation-id="${id}"]`);
-        if (!automationContainer) return;
+        if (!automationContainer) {
+            console.error(`[AUTOMATION] Container not found for automation ID: ${id}`);
+            alert(`Could not find automation container for ID: ${id}`);
+            return;
+        }
         
         const existingLogContainer = automationContainer.querySelector('.automation-log-container');
         if (existingLogContainer) {
             // Collapse logs if already expanded
+            console.log(`[AUTOMATION] Collapsing existing log container`);
             existingLogContainer.remove();
             return;
         }
@@ -323,11 +298,9 @@
         logContainer.className = 'automation-log-container mt-4 p-4 bg-gray-50 border rounded';
         logContainer.innerHTML = '<div class="text-blue-600">Loading logs...</div>';
         
-        // Insert after the automation info
-        const automationInfo = automationContainer.querySelector('.automation-info');
-        if (automationInfo) {
-            automationInfo.parentNode.insertBefore(logContainer, automationInfo.nextSibling);
-        }
+        // Insert at the end of the automation container (after the flex div)
+        automationContainer.appendChild(logContainer);
+        console.log(`[AUTOMATION] Log container added, loading logs...`);
         
         loadAutomationLogInline(id, logContainer);
     }
@@ -365,9 +338,13 @@
                     `;
                 }
                 
+                const totalFiles = data.totalFiles || 1;
+                const currentFile = data.currentFile || '';
+                
                 const logsHtml = `
                     <div class="mb-4">
-                        <h4 class="font-semibold text-gray-700 mb-2">Automation Logs (${total} total)</h4>
+                        <h4 class="font-semibold text-gray-700 mb-2">Automation Logs (${total} total${totalFiles > 1 ? `, ${totalFiles} files` : ''})</h4>
+                        ${totalFiles > 1 ? `<div class="text-xs text-gray-500 mb-2">Current log file: ${escapeHtml(currentFile)}</div>` : ''}
                         <div class="overflow-x-auto">
                             <table class="min-w-full bg-white border border-gray-200 text-sm">
                                 <thead class="bg-gray-100">
@@ -375,24 +352,29 @@
                                         <th class="px-3 py-2 text-left font-semibold border-b">Date/Time</th>
                                         <th class="px-3 py-2 text-left font-semibold border-b">Type</th>
                                         <th class="px-3 py-2 text-left font-semibold border-b">Message</th>
+                                        <th class="px-3 py-2 text-left font-semibold border-b">Notes</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${logs.map((log, index) => `
                                         <tr class="border-b hover:bg-gray-50">
-                                            <td class="px-3 py-2">${escapeHtml(log.time || '')}</td>
+                                            <td class="px-3 py-2 text-xs">${escapeHtml(log.timestamp || log.time || '')}</td>
                                             <td class="px-3 py-2">
                                                 <span class="px-2 py-1 text-xs rounded ${
                                                     log.type === 'auto_reply' ? 'bg-green-100 text-green-800' :
                                                     log.type === 'scheduled' ? 'bg-blue-100 text-blue-800' :
                                                     log.type === 'error' ? 'bg-red-100 text-red-800' :
+                                                    log.type === 'skipped' ? 'bg-yellow-100 text-yellow-800' :
                                                     'bg-gray-100 text-gray-800'
                                                 }">
                                                     ${escapeHtml(log.type || '')}
                                                 </span>
                                             </td>
                                             <td class="px-3 py-2">
-                                                ${truncateWithShowMore(log.message, 10, 'message', index)}
+                                                ${log.message ? truncateWithShowMore(log.message, 10, 'message', index) : '<span class="text-gray-400">-</span>'}
+                                            </td>
+                                            <td class="px-3 py-2 text-xs text-gray-600">
+                                                ${log.notes ? truncateWithShowMore(log.notes, 5, 'notes', index) : '<span class="text-gray-400">-</span>'}
                                             </td>
                                         </tr>
                                     `).join('')}
@@ -496,23 +478,6 @@
                                             ` : ''}
                                         </div>
                                     </div>
-                                    
-                                    <div class="text-xs text-gray-500">
-                                        <span class="font-medium">Auto Reply:</span>
-                                        <div class="mt-1">
-                                            ${isChannel ? 
-                                                '<span class="text-gray-400 italic">Not Available</span>' : 
-                                                `<div class="auto-reply-content-${index} text-xs bg-gray-50 p-2 rounded max-h-16 overflow-hidden">
-                                                    <span class="font-mono">${escapeHtml(a.autoReplyPrompt || 'None')}</span>
-                                                </div>
-                                                ${a.autoReplyPrompt && a.autoReplyPrompt.length > 200 ? `
-                                                    <button class="text-blue-600 hover:text-blue-800 text-xs mt-1 show-more-auto-reply-${index}" onclick="toggleAutoReplyPrompt(${index})">
-                                                        Show more
-                                                    </button>
-                                                ` : ''}`
-                                            }
-                                        </div>
-                                    </div>
                                 </div>
                             </div>
                             
@@ -538,7 +503,10 @@
                 btn.addEventListener('click', () => handlePauseAutomation(btn.dataset.id, btn.textContent));
             });
             document.querySelectorAll('.automation-log-btn').forEach(btn => {
-                btn.addEventListener('click', () => openAutomationLogModal(btn.dataset.id));
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openAutomationLogModal(btn.dataset.id);
+                });
             });
         }
     }
@@ -588,9 +556,6 @@
         if (automationChannelSelect) {
             automationChannelSelect.disabled = true;
         }
-        if (automationAutoReplyPrompt) {
-            automationAutoReplyPrompt.disabled = false;
-        }
         
         if (automationModal) automationModal.classList.remove('hidden');
     }
@@ -616,11 +581,9 @@
         // Temporarily enable all fields to prevent form validation errors
         const wasChatSelectDisabled = automationChatSelect?.disabled;
         const wasChannelSelectDisabled = automationChannelSelect?.disabled;
-        const wasAutoReplyDisabled = automationAutoReplyPrompt?.disabled;
         
         if (automationChatSelect) automationChatSelect.disabled = false;
         if (automationChannelSelect) automationChannelSelect.disabled = false;
-        if (automationAutoReplyPrompt) automationAutoReplyPrompt.disabled = false;
         
         const id = document.getElementById('automation-id')?.value;
         const automationType = automationTypeSelect?.value;
@@ -629,7 +592,6 @@
             (automationChannelSelect?.options[automationChannelSelect.selectedIndex]?.text || '') :
             (automationChatSelect?.options[automationChatSelect.selectedIndex]?.text || '');
         const systemPrompt = automationSystemPrompt?.value.trim();
-        const autoReplyPrompt = automationAutoReplyPrompt?.value.trim();
         const scheduleStr = automationSchedule?.value.trim();
         let schedule = null;
         
@@ -652,10 +614,6 @@
             return alert('Please fill all required fields.');
         }
         
-        if (automationType === 'chat' && !autoReplyPrompt) {
-            return alert('Auto Reply Prompt is required for chat automations.');
-        }
-        
         if (automationType === 'channel' && !schedule) {
             return alert('Schedule is required for channel automations.');
         }
@@ -670,7 +628,6 @@
                 chatId, 
                 chatName, 
                 systemPrompt, 
-                autoReplyPrompt, 
                 schedule, 
                 status,
                 automationType 
@@ -689,7 +646,6 @@
             // Restore the disabled state of fields
             if (automationChatSelect) automationChatSelect.disabled = wasChatSelectDisabled;
             if (automationChannelSelect) automationChannelSelect.disabled = wasChannelSelectDisabled;
-            if (automationAutoReplyPrompt) automationAutoReplyPrompt.disabled = wasAutoReplyDisabled;
         });
     }
 

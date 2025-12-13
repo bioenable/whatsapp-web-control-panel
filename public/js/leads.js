@@ -1504,6 +1504,10 @@
         })
         .catch(err => {
             console.error('silentFetchLeadsFromAPI: Failed to fetch leads from API:', err);
+            // Check if it's a configuration error
+            if (err.message.includes('500')) {
+                showLeadsStatus('Leads API not configured. Please set LEADS_API_URL and LEADS_API_KEY in .env file', 'error');
+            }
         });
     }
 
@@ -2217,6 +2221,7 @@
             }
         } catch (err) {
             console.error('Manual fetch: Failed to fetch leads from API:', err);
+            showLeadsStatus('Leads API not configured. Please set LEADS_API_URL and LEADS_API_KEY in .env file', 'error');
         }
     };
 

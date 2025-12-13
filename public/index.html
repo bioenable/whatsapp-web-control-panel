@@ -47,9 +47,15 @@
                 <svg class="w-7 h-7 mr-2" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.72 11.06a4.5 4.5 0 01-6.36 6.36l-2.12-2.12a4.5 4.5 0 016.36-6.36l2.12 2.12z"></path></svg>
                 WhatsApp Web Control
             </a>
-            <div class="flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold bg-yellow-400 text-black">
-                <div id="status-indicator" class="inline-block w-3 h-3 rounded-full bg-yellow-500"></div>
-                <span id="status-text">Connecting...</span>
+            <div class="flex items-center gap-3">
+                <div id="user-info-container" class="text-white text-sm hidden">
+                    <span id="user-name" class="font-semibold"></span>
+                    <span id="user-number" class="text-gray-200 ml-1"></span>
+                </div>
+                <div class="flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold bg-yellow-400 text-black">
+                    <div id="status-indicator" class="inline-block w-3 h-3 rounded-full bg-yellow-500"></div>
+                    <span id="status-text">Connecting...</span>
+                </div>
             </div>
         </div>
     </nav>
@@ -65,18 +71,8 @@
                     </button>
                 </li>
                 <li class="-mb-px mr-2">
-                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="send-tab" data-tab="send" type="button" role="tab" aria-controls="send" aria-selected="false">
-                        Send Message
-                    </button>
-                </li>
-                <li class="-mb-px mr-2">
-                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="templates-tab" data-tab="templates" type="button" role="tab" aria-controls="templates" aria-selected="false">
-                        Templates
-                    </button>
-                </li>
-                <li class="-mb-px mr-2">
-                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="bulk-tab" data-tab="bulk" type="button" role="tab" aria-controls="bulk" aria-selected="false">
-                        Bulk
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="messages-tab" data-tab="messages" type="button" role="tab" aria-controls="messages" aria-selected="false">
+                        Messages
                     </button>
                 </li>
                 <li class="-mb-px mr-2">
@@ -97,6 +93,11 @@
                 <li class="-mb-px mr-2">
                     <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="leads-tab" data-tab="leads" type="button" role="tab" aria-controls="leads" aria-selected="false">
                         Leads
+                    </button>
+                </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="cloud-tab" data-tab="cloud" type="button" role="tab" aria-controls="cloud" aria-selected="false">
+                        Cloud
                     </button>
                 </li>
             </ul>
@@ -130,8 +131,29 @@
                         </div>
                     </div>
                 </div>
-                <div id="send" class="tab-pane hidden">
-                    <form id="send-message-form" class="space-y-4">
+                <div id="messages" class="tab-pane hidden">
+                    <!-- Messages Sub-tabs -->
+                    <ul class="flex border-b mb-6" id="messages-sub-tabs" role="tablist">
+                        <li class="-mb-px mr-2">
+                            <button class="messages-sub-tab-link inline-block py-2 px-4 text-green-700 border-b-2 border-green-700 font-semibold" id="send-message-sub-tab" data-sub-tab="send-message" type="button" role="tab" aria-selected="true">
+                                Send Message
+                            </button>
+                        </li>
+                        <li class="-mb-px mr-2">
+                            <button class="messages-sub-tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="templates-sub-tab" data-sub-tab="templates" type="button" role="tab" aria-selected="false">
+                                Templates
+                            </button>
+                        </li>
+                        <li class="-mb-px mr-2">
+                            <button class="messages-sub-tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="bulk-sub-tab" data-sub-tab="bulk" type="button" role="tab" aria-selected="false">
+                                Bulk
+                            </button>
+                        </li>
+                    </ul>
+                    <!-- Messages Sub-tab Content -->
+                    <div id="messages-sub-content">
+                        <div id="send-message" class="messages-sub-pane">
+                            <form id="send-message-form" class="space-y-4">
                         <div class="mb-3">
                             <label for="recipient-select" class="block text-sm font-medium mb-1">Select Recipient(s)</label>
                             <select class="w-full border rounded px-3 py-2" id="recipient-select" multiple>
@@ -218,15 +240,15 @@
                             <div class="mt-6 mb-8"></div>
                         </div>
                     </div>
-                </div>
-                <div id="templates" class="tab-pane hidden">
-                    <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-xl font-semibold">Templates</h2>
-                        <button id="add-template-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Add Template</button>
-                    </div>
-                    <div id="templates-list" class="space-y-2">
-                        <!-- Templates will be rendered here -->
-                    </div>
+                        </div>
+                        <div id="templates" class="messages-sub-pane hidden">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-semibold">Templates</h2>
+                                <button id="add-template-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">Add Template</button>
+                            </div>
+                            <div id="templates-list" class="space-y-2">
+                                <!-- Templates will be rendered here -->
+                            </div>
                     <!-- Add/Edit Template Modal -->
                     <div id="template-modal" class="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50 hidden">
                         <div class="bg-white rounded-lg shadow-lg w-full max-w-md p-6 relative">
@@ -265,13 +287,13 @@
                             </div>
                         </div>
                     </div>
-                </div>
-                <div id="bulk" class="tab-pane hidden">
-                    <div class="mb-2 flex items-center gap-2">
-                        <span id="bulk-timezone-info" class="text-xs text-gray-700"></span>
-                    </div>
-                    <div class="flex justify-between items-center mb-4">
-                        <h2 class="text-xl font-semibold">Bulk Messaging</h2>
+                        </div>
+                        <div id="bulk" class="messages-sub-pane hidden">
+                            <div class="mb-2 flex items-center gap-2">
+                                <span id="bulk-timezone-info" class="text-xs text-gray-700"></span>
+                            </div>
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-semibold">Bulk Messaging</h2>
                         <div class="flex items-center gap-2">
                             <button id="bulk-form-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Create Bulk Schedule</button>
                             <form id="bulk-import-form" class="flex items-center gap-2" enctype="multipart/form-data">
@@ -285,9 +307,10 @@
                         <span class="text-xs text-gray-500">Download a sample CSV with 3 tech jokes, ready for import and testing.</span>
                     </div>
                     <div id="bulk-import-errors" class="text-red-600 mb-2"></div>
-                    <div class="mb-4 flex items-center gap-2">
+                    <div class="mb-4 flex items-center gap-2 flex-wrap">
                         <label for="bulk-import-filter" class="block text-sm font-medium">Filter by Import Filename:</label>
                         <select id="bulk-import-filter" class="border rounded px-2 py-1"></select>
+                        <button id="bulk-show-past-btn" class="bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700 text-xs">Show Past Records</button>
                         <button id="bulk-delete-btn" class="bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700 text-xs">Delete Import</button>
                         <button id="bulk-cancel-btn" class="bg-yellow-500 text-white px-3 py-1 rounded hover:bg-yellow-600 text-xs">Cancel Import</button>
                         <button id="bulk-retry-btn" class="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-xs">Retry Failed</button>
@@ -428,6 +451,8 @@
                                     <button type="submit" class="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700">Create Schedule</button>
                                 </div>
                             </form>
+                        </div>
+                    </div>
                         </div>
                     </div>
                 </div>
@@ -630,7 +655,7 @@ One contact per line. Names will be automatically split if using Format 1."></te
                                 </button>
                             </div>
                         </div>
-                        <div class="text-gray-600 mb-4">Create, edit, and manage chat automations. Automations can auto-reply or send scheduled messages to selected chats.</div>
+                        <div class="text-gray-600 mb-4">Create, edit, and manage chat automations. Automations can send scheduled messages to selected chats.</div>
                         <div class="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4">
                             <div class="text-yellow-800 text-sm">
                                 <strong>⚠️ Setup Required:</strong> To use Automate features, create a <code>.env</code> file in the project root with:
@@ -668,22 +693,17 @@ One contact per line. Names will be automatically split if using Format 1."></te
                                     <select id="automation-channel-select" class="w-full border rounded px-3 py-2">
                                         <option value="">-- Select channel --</option>
                                     </select>
-                                    <div class="text-xs text-gray-500 mt-1">Note: Auto-reply is not available for channels. Only scheduled messages are supported.</div>
+                                    <div class="text-xs text-gray-500 mt-1">Note: Only scheduled messages are supported for channels.</div>
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium mb-1">System Prompt</label>
                                     <textarea id="automation-system-prompt" class="w-full border rounded px-3 py-2 resize-y" rows="6" required maxlength="10000" placeholder="e.g. You are a helpful assistant..."></textarea>
                                     <div class="text-xs text-gray-500 mt-1">Maximum 10,000 characters allowed. You can resize the textarea vertically.</div>
                                 </div>
-                                <div id="automation-auto-reply-section">
-                                    <label class="block text-sm font-medium mb-1">Auto Reply Prompt</label>
-                                    <textarea id="automation-auto-reply-prompt" class="w-full border rounded px-3 py-2 resize-y" rows="6" maxlength="10000" placeholder="e.g. Reply to the user with..."></textarea>
-                                    <div class="text-xs text-gray-500 mt-1">Required for chat automations. Not available for channels. Maximum 10,000 characters allowed. You can resize the textarea vertically.</div>
-                                </div>
                                 <div>
                                     <label class="block text-sm font-medium mb-1">Schedule (Days, Times) <span class='text-xs text-gray-500' id="schedule-optional">(optional)</span><span class='text-xs text-red-500 hidden' id="schedule-required">(required for channels)</span></label>
                                     <input type="text" id="automation-schedule" class="w-full border rounded px-3 py-2" placeholder='e.g. {"days":["Mon","Wed"],"times":["09:00","18:00"]}'>
-                                    <div class="text-xs text-gray-500">JSON: days (Mon-Sun), times (24h, e.g. "09:00"). Leave empty for auto-reply only.</div>
+                                    <div class="text-xs text-gray-500">JSON: days (Mon-Sun), times (24h, e.g. "09:00").</div>
                                     <div class="text-xs text-gray-400 mt-1">Sample: <span class="font-mono">{"days":["Mon","Wed"],"times":["09:00","18:00"]}</span></div>
                                 </div>
                                 <div>
@@ -771,6 +791,11 @@ One contact per line. Names will be automatically split if using Format 1."></te
                                 <button id="leads-refresh-btn" class="bg-green-600 text-white p-3 rounded hover:bg-green-700 transition-colors" title="Refresh Leads Data">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                </button>
+                                <button id="leads-api-config-btn" class="bg-orange-600 text-white p-3 rounded hover:bg-orange-700 transition-colors" title="API Configuration">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
                                     </svg>
                                 </button>
                                 
@@ -990,15 +1015,323 @@ One contact per line. Names will be automatically split if using Format 1."></te
     <script src="/js/automate.js"></script>
     <script src="/js/leads.js"></script>
     <script>
+      // URL routing for tabs
+      function switchToTab(tabName, updateUrl = true) {
+        document.querySelectorAll('.tab-link').forEach(b => b.classList.remove('text-green-700', 'border-green-700'));
+        document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.add('hidden'));
+        
+        const tabBtn = document.querySelector(`[data-tab="${tabName}"]`);
+        const tabPane = document.getElementById(tabName);
+        
+        if (tabBtn && tabPane) {
+          tabBtn.classList.add('text-green-700', 'border-green-700');
+          tabPane.classList.remove('hidden');
+          
+          // If Messages tab is clicked, show the first sub-tab (Send Message)
+          if (tabName === 'messages') {
+            showMessagesSubTab('send-message');
+          }
+          
+          // Update URL without page reload
+          if (updateUrl) {
+            const newUrl = window.location.pathname + (tabName !== 'chats' ? `#${tabName}` : '');
+            window.history.pushState({ tab: tabName }, '', newUrl);
+          }
+        }
+      }
+      
+      // Handle browser back/forward buttons
+      window.addEventListener('popstate', function(event) {
+        const hash = window.location.hash.substring(1);
+        if (hash) {
+          switchToTab(hash, false);
+        } else {
+          switchToTab('chats', false);
+        }
+      });
+      
+      // Check URL hash on page load
+      window.addEventListener('DOMContentLoaded', function() {
+        const hash = window.location.hash.substring(1);
+        if (hash) {
+          switchToTab(hash, false);
+        }
+      });
+      
       // Simple tab switching logic
       document.querySelectorAll('.tab-link').forEach(btn => {
         btn.addEventListener('click', function() {
-          document.querySelectorAll('.tab-link').forEach(b => b.classList.remove('text-green-700', 'border-green-700'));
-          this.classList.add('text-green-700', 'border-green-700');
-          document.querySelectorAll('.tab-pane').forEach(pane => pane.classList.add('hidden'));
-          document.getElementById(this.dataset.tab).classList.remove('hidden');
+          const targetTab = this.dataset.tab;
+          switchToTab(targetTab);
         });
       });
+      
+      // Messages sub-tab switching logic (global function)
+      window.showMessagesSubTab = function(subTabId) {
+        // Hide all sub-panes
+        document.querySelectorAll('.messages-sub-pane').forEach(pane => pane.classList.add('hidden'));
+        // Show selected sub-pane
+        document.getElementById(subTabId).classList.remove('hidden');
+        
+        // Update sub-tab button styles
+        document.querySelectorAll('.messages-sub-tab-link').forEach(btn => {
+          btn.classList.remove('text-green-700', 'border-green-700');
+          btn.classList.add('text-gray-600', 'border-transparent');
+        });
+        const activeBtn = document.querySelector(`[data-sub-tab="${subTabId}"]`);
+        if (activeBtn) {
+          activeBtn.classList.remove('text-gray-600', 'border-transparent');
+          activeBtn.classList.add('text-green-700', 'border-green-700');
+        }
+      }
+      
+      // Set up messages sub-tab click handlers
+      document.querySelectorAll('.messages-sub-tab-link').forEach(btn => {
+        btn.addEventListener('click', function() {
+          showMessagesSubTab(this.dataset.subTab);
+        });
+      });
+    </script>
+
+    <!-- Leads API Configuration Modal -->
+    <div id="leads-api-config-modal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden z-50">
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+                <div class="flex items-center justify-between p-6 border-b">
+                    <h3 class="text-lg font-semibold text-gray-900">Leads API Configuration</h3>
+                    <button id="leads-api-config-close" class="text-gray-400 hover:text-gray-600">
+                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                        </svg>
+                    </button>
+                </div>
+                <div class="p-6">
+                    <div class="mb-6">
+                        <h4 class="text-md font-semibold text-gray-800 mb-3">Environment Variables Required</h4>
+                        <p class="text-sm text-gray-600 mb-4">Add these variables to your <code class="bg-gray-100 px-2 py-1 rounded">.env</code> file:</p>
+                        <div class="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm">
+                            <div>LEADS_API_URL=https://your-api-endpoint.com/api/leads</div>
+                            <div>LEADS_API_KEY=your-api-key-here</div>
+                        </div>
+                    </div>
+
+                    <div class="mb-6">
+                        <h4 class="text-md font-semibold text-gray-800 mb-3">Expected API Response Format</h4>
+                        <p class="text-sm text-gray-600 mb-4">Your API should return data in this JSON format:</p>
+                        <div class="bg-gray-900 text-green-400 p-4 rounded-lg font-mono text-sm overflow-x-auto">
+                            <pre>{
+  "success": true,
+  "data": [
+    {
+      "id": 1,
+      "name": "John Doe",
+      "phone": "+1234567890",
+      "email": "john@example.com",
+      "location": "New York",
+      "status": "active",
+      "created_at": "2025-01-27T10:00:00Z"
+    },
+    {
+      "id": 2,
+      "name": "Jane Smith",
+      "phone": "+1234567891",
+      "email": "jane@example.com",
+      "location": "Los Angeles",
+      "status": "pending",
+      "created_at": "2025-01-27T11:00:00Z"
+    },
+    {
+      "id": 3,
+      "name": "Bob Johnson",
+      "phone": "+1234567892",
+      "email": "bob@example.com",
+      "location": "Chicago",
+      "status": "active",
+      "created_at": "2025-01-27T12:00:00Z"
+    },
+    {
+      "id": 4,
+      "name": "Alice Brown",
+      "phone": "+1234567893",
+      "email": "alice@example.com",
+      "location": "Houston",
+      "status": "inactive",
+      "created_at": "2025-01-27T13:00:00Z"
+    },
+    {
+      "id": 5,
+      "name": "Charlie Wilson",
+      "phone": "+1234567894",
+      "email": "charlie@example.com",
+      "location": "Phoenix",
+      "status": "active",
+      "created_at": "2025-01-27T14:00:00Z"
+    }
+  ]
+}</pre>
+                        </div>
+                    </div>
+
+                    <div class="mb-6">
+                        <h4 class="text-md font-semibold text-gray-800 mb-3">Required Fields</h4>
+                        <div class="grid grid-cols-2 gap-4 text-sm">
+                            <div>
+                                <h5 class="font-medium text-gray-700 mb-2">Essential Fields:</h5>
+                                <ul class="list-disc list-inside text-gray-600 space-y-1">
+                                    <li><code>id</code> - Unique identifier</li>
+                                    <li><code>name</code> - Lead's full name</li>
+                                    <li><code>phone</code> - Phone number</li>
+                                    <li><code>email</code> - Email address</li>
+                                </ul>
+                            </div>
+                            <div>
+                                <h5 class="font-medium text-gray-700 mb-2">Optional Fields:</h5>
+                                <ul class="list-disc list-inside text-gray-600 space-y-1">
+                                    <li><code>location</code> - City/State</li>
+                                    <li><code>status</code> - Lead status</li>
+                                    <li><code>created_at</code> - Timestamp</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end space-x-3">
+                        <button id="leads-api-config-close-btn" class="px-4 py-2 text-gray-600 bg-gray-200 rounded hover:bg-gray-300 transition-colors">
+                            Close
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+                <div id="cloud" class="tab-pane hidden">
+                    <div class="space-y-6">
+                        <!-- Connection Status -->
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-semibold">Cloudflare Connection Status</h2>
+                                <button id="cloud-refresh-status-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
+                            </div>
+                            <div id="cloud-status-container" class="space-y-3">
+                                <div class="flex items-center gap-2">
+                                    <div id="cloud-status-indicator" class="w-4 h-4 rounded-full bg-gray-400"></div>
+                                    <span id="cloud-status-text" class="text-gray-700">Loading...</span>
+                                </div>
+                                <div id="cloud-status-details" class="text-sm text-gray-600 space-y-1"></div>
+                            </div>
+                        </div>
+
+                        <!-- Channel Web Links -->
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <h2 class="text-xl font-semibold mb-4">Channel Web Pages</h2>
+                            <div id="cloud-channels-container" class="space-y-2">
+                                <div class="text-gray-500">Loading channels...</div>
+                            </div>
+                        </div>
+
+                        <!-- Messages Table -->
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-semibold">Messages Sent via Cloudflare</h2>
+                                <button id="cloud-refresh-messages-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
+                            </div>
+                            <div id="cloud-messages-container" class="overflow-x-auto">
+                                <table class="min-w-full bg-white border border-gray-200 text-sm">
+                                    <thead class="bg-gray-100">
+                                        <tr>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Time</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">To</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Message</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Media</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Status</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Message ID</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="cloud-messages-table-body">
+                                        <tr><td colspan="6" class="text-center py-4 text-gray-500">Loading messages...</td></tr>
+                                    </tbody>
+                                </table>
+                                <div class="flex justify-between items-center mt-4">
+                                    <button id="cloud-messages-prev" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Prev</button>
+                                    <span id="cloud-messages-page-info" class="text-xs text-gray-600"></span>
+                                    <button id="cloud-messages-next" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Next</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Queue -->
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-semibold">Message Queue</h2>
+                                <button id="cloud-refresh-queue-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
+                            </div>
+                            <div id="cloud-queue-container" class="overflow-x-auto">
+                                <table class="min-w-full bg-white border border-gray-200 text-sm">
+                                    <thead class="bg-gray-100">
+                                        <tr>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Queue ID</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">To</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Message</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Priority</th>
+                                            <th class="px-4 py-2 text-left font-semibold border-b">Queued At</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="cloud-queue-table-body">
+                                        <tr><td colspan="5" class="text-center py-4 text-gray-500">Loading queue...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Sync Logs -->
+                        <div class="bg-white rounded-lg shadow p-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h2 class="text-xl font-semibold">Sync Logs</h2>
+                                <button id="cloud-refresh-logs-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
+                            </div>
+                            <div id="cloud-logs-container" class="space-y-2">
+                                <div class="text-gray-500">Loading logs...</div>
+                            </div>
+                            <div class="flex justify-between items-center mt-4">
+                                <button id="cloud-logs-prev" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Prev</button>
+                                <span id="cloud-logs-page-info" class="text-xs text-gray-600"></span>
+                                <button id="cloud-logs-next" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Leads API Configuration Modal
+        document.addEventListener('DOMContentLoaded', function() {
+            const configBtn = document.getElementById('leads-api-config-btn');
+            const modal = document.getElementById('leads-api-config-modal');
+            const closeBtn = document.getElementById('leads-api-config-close');
+            const closeBtn2 = document.getElementById('leads-api-config-close-btn');
+
+            if (configBtn && modal) {
+                configBtn.addEventListener('click', function() {
+                    modal.classList.remove('hidden');
+                });
+
+                closeBtn.addEventListener('click', function() {
+                    modal.classList.add('hidden');
+                });
+
+                closeBtn2.addEventListener('click', function() {
+                    modal.classList.add('hidden');
+                });
+
+                modal.addEventListener('click', function(e) {
+                    if (e.target === modal) {
+                        modal.classList.add('hidden');
+                    }
+                });
+            }
+        });
     </script>
 </body>
 </html> 

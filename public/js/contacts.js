@@ -45,6 +45,12 @@
     function initContactsTab() {
         if (!contactsTab) return;
 
+        // Add click handler to load contacts when tab is clicked
+        contactsTab.addEventListener('click', () => {
+            // Always try to load contacts when tab is clicked (API will handle if not ready)
+            loadContacts();
+        });
+
         // Set up event listeners
         // Use MutationObserver to detect when contacts tab becomes visible
         const contactsPane = document.getElementById('contacts');
@@ -121,6 +127,11 @@
 
     // Load contacts from JSON file with pagination
     function loadContacts(page = 1, search = '') {
+        if (!contactsList) {
+            console.error('Contacts list element not found');
+            return Promise.reject(new Error('Contacts list element not found'));
+        }
+        
         showLoading();
         
         const params = new URLSearchParams({
@@ -133,10 +144,22 @@
         }
         
         return fetch(`/api/contacts?${params}`)
-            .then(res => res.json())
+            .then(res => {
+                if (!res.ok) {
+                    if (res.status === 503) {
+                        throw new Error('WhatsApp client not ready. Please wait...');
+                    }
+                    throw new Error(`HTTP error! status: ${res.status}`);
+                }
+                return res.json();
+            })
             .then(data => {
                 if (data.error) {
                     throw new Error(data.error);
+                }
+                
+                if (!Array.isArray(data.contacts)) {
+                    throw new Error('Invalid response format: expected contacts array');
                 }
                 
                 allContacts = data.contacts || [];
@@ -144,6 +167,8 @@
                 currentPage = data.page || 1;
                 totalPages = data.totalPages || 1;
                 currentSearch = search;
+                
+                console.log(`Loaded ${allContacts.length} contacts (page ${currentPage}/${totalPages}, total: ${totalContacts})`);
                 
                 renderContacts();
                 updateContactCount();
@@ -154,7 +179,10 @@
             })
             .catch(err => {
                 console.error('Failed to load contacts:', err);
-                showError('Failed to load contacts: ' + err.message);
+                const errorMsg = err.message.includes('not ready') 
+                    ? 'WhatsApp not ready. Waiting for connection...'
+                    : `Failed to load contacts: ${err.message}`;
+                showError(errorMsg);
                 hideLoading();
                 throw err;
             });
