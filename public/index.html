@@ -95,11 +95,6 @@
                         Leads
                     </button>
                 </li>
-                <li class="-mb-px mr-2">
-                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="cloud-tab" data-tab="cloud" type="button" role="tab" aria-controls="cloud" aria-selected="false">
-                        Cloud
-                    </button>
-                </li>
             </ul>
             <div id="tab-content">
                 <div id="chats" class="tab-pane">
@@ -570,55 +565,12 @@ One contact per line. Names will be automatically split if using Format 1."></te
                     <div class="mb-4 bg-white rounded shadow p-4">
                         <div class="flex justify-between items-center mb-4">
                             <h2 class="text-xl font-semibold">Channels Management</h2>
-                            <div class="flex items-center gap-2">
-                                <select id="channel-fetch-method" class="border rounded px-3 py-1 text-sm">
-                                    <option value="all">All Channels</option>
-                                    <option value="followed">Followed Only</option>
-                                    <option value="subscribed">Subscribed Only</option>
-                                    <option value="admin">Admin Only</option>
-                                </select>
-                                <button id="refresh-channels-btn" class="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-sm">Refresh</button>
-                            </div>
+                            <button id="refresh-channels-btn" class="bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700 text-sm">Refresh</button>
                         </div>
                         <div class="text-sm text-gray-600 mb-4">
                             <strong>Channel Types:</strong> 
                             <span class="inline-block bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs mr-2">Admin</span> - You can send messages
                             <span class="inline-block bg-orange-100 text-orange-800 px-2 py-1 rounded text-xs ml-2">Read Only</span> - You can only read messages
-                        </div>
-                        
-                        <!-- Channel Send Options -->
-                        <div id="channel-send-options" class="mb-4 p-4 bg-gray-50 rounded border">
-                            <h3 class="text-lg font-semibold mb-3">Send Messages to Channels</h3>
-                            <div class="flex gap-2 mb-3">
-                                <button id="channel-send-to-all-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
-                                    Send to All Admin Channels
-                                </button>
-                                <button id="channel-send-specific-btn" class="bg-purple-600 text-white px-4 py-2 rounded hover:bg-purple-700 text-sm">
-                                    Send to Specific Channel
-                                </button>
-                            </div>
-                            
-                            <!-- Global Channel Send Form -->
-                            <form id="channel-send-form-global" class="space-y-3 hidden">
-                                <div id="channel-id-input" class="hidden">
-                                    <label class="block text-sm font-medium mb-1">Channel ID</label>
-                                    <input type="text" class="w-full border rounded px-3 py-2 text-sm" placeholder="e.g., 120363208697463412@newsletter">
-                                    <div class="text-xs text-gray-500 mt-1">Enter the channel ID (ends with @newsletter or similar)</div>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium mb-1">Message</label>
-                                    <textarea id="channel-message-text-global" class="w-full border rounded px-3 py-2 resize-none" rows="3" placeholder="Enter your message..."></textarea>
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium mb-1">Media (optional)</label>
-                                    <input type="file" id="channel-attachment-global" class="w-full border rounded px-3 py-2 text-sm" accept="image/*,video/*,application/pdf">
-                                    <div class="text-xs text-gray-500 mt-1">Image, Video, or PDF (max 100MB)</div>
-                                </div>
-                                <div class="flex gap-2">
-                                    <button type="button" onclick="cancelChannelSend()" class="px-4 py-2 rounded border text-sm">Cancel</button>
-                                    <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 text-sm">Send Message</button>
-                                </div>
-                            </form>
                         </div>
                     </div>
                     
@@ -626,14 +578,24 @@ One contact per line. Names will be automatically split if using Format 1."></te
                         <!-- Sidebar: Channel List -->
                         <div class="w-1/3 border-r overflow-y-auto" id="channel-list-sidebar">
                             <div class="p-3 border-b bg-gray-50">
-                                <div class="text-sm font-semibold text-gray-700 mb-2">Channel List</div>
+                                <div class="flex items-center justify-between mb-2">
+                                    <div class="text-sm font-semibold text-gray-700">Channel List</div>
+                                    <select id="channel-filter-status" class="border rounded px-2 py-1 text-xs">
+                                        <option value="admin" selected>Admin</option>
+                                        <option value="all">All</option>
+                                        <option value="readonly">Read Only</option>
+                                    </select>
+                                </div>
                                 <div id="channel-stats" class="text-xs text-gray-500"></div>
                             </div>
                             <div id="channel-list" class="divide-y"></div>
                         </div>
                         <!-- Main: Channel Messages -->
                         <div class="flex-1 flex flex-col">
-                            <div id="channel-header" class="p-3 border-b bg-gray-50 font-semibold h-14 flex items-center">Select a channel</div>
+                            <div id="channel-header" class="p-3 border-b bg-gray-50 font-semibold h-14 flex items-center justify-between">
+                                <span id="channel-header-name">Select a channel</span>
+                                <span id="channel-header-link"></span>
+                            </div>
                             <div id="channel-message-container" class="flex-1 overflow-y-auto p-3 bg-gray-50"></div>
                             <form id="channel-send-form" class="flex items-end gap-2 p-3 border-t bg-white hidden">
                                 <input type="file" id="channel-attachment" class="hidden" accept="image/*,video/*,application/pdf">
@@ -1204,102 +1166,6 @@ One contact per line. Names will be automatically split if using Format 1."></te
             </div>
         </div>
     </div>
-                <div id="cloud" class="tab-pane hidden">
-                    <div class="space-y-6">
-                        <!-- Connection Status -->
-                        <div class="bg-white rounded-lg shadow p-6">
-                            <div class="flex justify-between items-center mb-4">
-                                <h2 class="text-xl font-semibold">Cloudflare Connection Status</h2>
-                                <button id="cloud-refresh-status-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
-                            </div>
-                            <div id="cloud-status-container" class="space-y-3">
-                                <div class="flex items-center gap-2">
-                                    <div id="cloud-status-indicator" class="w-4 h-4 rounded-full bg-gray-400"></div>
-                                    <span id="cloud-status-text" class="text-gray-700">Loading...</span>
-                                </div>
-                                <div id="cloud-status-details" class="text-sm text-gray-600 space-y-1"></div>
-                            </div>
-                        </div>
-
-                        <!-- Channel Web Links -->
-                        <div class="bg-white rounded-lg shadow p-6">
-                            <h2 class="text-xl font-semibold mb-4">Channel Web Pages</h2>
-                            <div id="cloud-channels-container" class="space-y-2">
-                                <div class="text-gray-500">Loading channels...</div>
-                            </div>
-                        </div>
-
-                        <!-- Messages Table -->
-                        <div class="bg-white rounded-lg shadow p-6">
-                            <div class="flex justify-between items-center mb-4">
-                                <h2 class="text-xl font-semibold">Messages Sent via Cloudflare</h2>
-                                <button id="cloud-refresh-messages-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
-                            </div>
-                            <div id="cloud-messages-container" class="overflow-x-auto">
-                                <table class="min-w-full bg-white border border-gray-200 text-sm">
-                                    <thead class="bg-gray-100">
-                                        <tr>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Time</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">To</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Message</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Media</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Status</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Message ID</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="cloud-messages-table-body">
-                                        <tr><td colspan="6" class="text-center py-4 text-gray-500">Loading messages...</td></tr>
-                                    </tbody>
-                                </table>
-                                <div class="flex justify-between items-center mt-4">
-                                    <button id="cloud-messages-prev" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Prev</button>
-                                    <span id="cloud-messages-page-info" class="text-xs text-gray-600"></span>
-                                    <button id="cloud-messages-next" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Next</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Queue -->
-                        <div class="bg-white rounded-lg shadow p-6">
-                            <div class="flex justify-between items-center mb-4">
-                                <h2 class="text-xl font-semibold">Message Queue</h2>
-                                <button id="cloud-refresh-queue-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
-                            </div>
-                            <div id="cloud-queue-container" class="overflow-x-auto">
-                                <table class="min-w-full bg-white border border-gray-200 text-sm">
-                                    <thead class="bg-gray-100">
-                                        <tr>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Queue ID</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">To</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Message</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Priority</th>
-                                            <th class="px-4 py-2 text-left font-semibold border-b">Queued At</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="cloud-queue-table-body">
-                                        <tr><td colspan="5" class="text-center py-4 text-gray-500">Loading queue...</td></tr>
-                                    </tbody>
-                                </table>
-                            </div>
-                        </div>
-
-                        <!-- Sync Logs -->
-                        <div class="bg-white rounded-lg shadow p-6">
-                            <div class="flex justify-between items-center mb-4">
-                                <h2 class="text-xl font-semibold">Sync Logs</h2>
-                                <button id="cloud-refresh-logs-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">Refresh</button>
-                            </div>
-                            <div id="cloud-logs-container" class="space-y-2">
-                                <div class="text-gray-500">Loading logs...</div>
-                            </div>
-                            <div class="flex justify-between items-center mt-4">
-                                <button id="cloud-logs-prev" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Prev</button>
-                                <span id="cloud-logs-page-info" class="text-xs text-gray-600"></span>
-                                <button id="cloud-logs-next" class="px-3 py-1 border rounded text-xs disabled:opacity-50">Next</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
     </div>

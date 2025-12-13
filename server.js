@@ -3135,6 +3135,35 @@ app.get('/api/channels/detailed', async (req, res) => {
     }
 });
 
+// Verify channel admin status (get fresh data from WhatsApp)
+app.get('/api/channels/:channelId/verify', async (req, res) => {
+    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
+    try {
+        const { channelId } = req.params;
+        const channel = await client.getChatById(channelId);
+        
+        if (!channel) {
+            return res.status(404).json({ error: 'Channel not found' });
+        }
+        
+        if (!channel.isChannel) {
+            return res.status(400).json({ error: 'Not a channel' });
+        }
+        
+        // Return the actual isReadOnly status from WhatsApp
+        res.json({
+            id: channel.id._serialized,
+            name: channel.name,
+            isReadOnly: channel.isReadOnly,
+            isChannel: channel.isChannel,
+            verified: true
+        });
+    } catch (err) {
+        console.error('Failed to verify channel status:', err);
+        res.status(500).json({ error: 'Failed to verify channel status', details: err.message });
+    }
+});
+
 // Get incoming channel messages (messages not from @c.us or @g.us)
 app.get('/api/incoming-channel-messages', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
@@ -5507,7 +5536,7 @@ app.post('/api/channel/:channelId/sync-messages', async (req, res) => {
             channelName: channelInfo.name,
             messagesSynced: todayMessages.length,
             syncTime: new Date().toISOString(),
-            webpageUrl: `${process.env.CLOUDFLARE_BASE_URL || 'https://your-worker-url.workers.dev'}/channel/${encodeURIComponent(channelId)}`
+            webpageUrl: `${process.env.CLOUDFLARE_BASE_URL || 'https://your-worker-url.workers.dev'}/channel/${encodeChannelIdForUrl(channelId)}`
         });
 
     } catch (error) {
@@ -5601,7 +5630,7 @@ app.post('/api/channel/:channelId/sync-web', async (req, res) => {
             channelName: channelInfo.name,
             messagesSynced: todayMessages.length,
             syncTime: new Date().toISOString(),
-            webpageUrl: `${process.env.CLOUDFLARE_BASE_URL || 'https://your-worker-url.workers.dev'}/channel/${encodeURIComponent(channelId)}`
+            webpageUrl: `${process.env.CLOUDFLARE_BASE_URL || 'https://your-worker-url.workers.dev'}/channel/${encodeChannelIdForUrl(channelId)}`
         });
         
     } catch (error) {
@@ -5614,277 +5643,11 @@ app.post('/api/channel/:channelId/sync-web', async (req, res) => {
     }
 });
 
-// ===== CLOUD SECTION API ENDPOINTS =====
-
-// Get Cloudflare connection status (checks log files for current session)
-app.get('/api/cloud/status', (req, res) => {
-    try {
-        const baseUrl = process.env.CLOUDFLARE_BASE_URL || null;
-        const hasConfig = !!(process.env.CLOUDFLARE_BASE_URL && process.env.CLOUDFLARE_API_KEY);
-        
-        // Check log files for connection status in current session
-        let isConnectedFromLogs = false;
-        let connectionTimestamp = null;
-        
-        try {
-            let allLogs = [];
-            let fileIndex = 0;
-            const baseName = CLOUDFLARE_LOGS_FILE.replace('.json', '');
-            
-            // Read all rotated log files
-            while (true) {
-                let logFile;
-                if (fileIndex === 0) {
-                    logFile = CLOUDFLARE_LOGS_FILE;
-                } else {
-                    logFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
-                }
-                
-                if (!fs.existsSync(logFile)) {
-                    break;
-                }
-                
-                try {
-                    const fileContent = fs.readFileSync(logFile, 'utf8');
-                    if (fileContent.trim()) {
-                        const fileLogs = JSON.parse(fileContent);
-                        if (Array.isArray(fileLogs)) {
-                            allLogs = allLogs.concat(fileLogs);
-                        }
-                    }
-                } catch (e) {
-                    // Skip corrupted files
-                }
-                
-                fileIndex++;
-                if (fileIndex > 100) break; // Safety limit
-            }
-            
-            // Find the most recent connection log entry
-            const connectionLogs = allLogs.filter(log => 
-                log.type === 'connection' && 
-                (log.status === 'connected' || log.status === 'failed')
-            );
-            
-            if (connectionLogs.length > 0) {
-                // Sort by timestamp (most recent first)
-                connectionLogs.sort((a, b) => {
-                    const timeA = new Date(a.timestamp || 0).getTime();
-                    const timeB = new Date(b.timestamp || 0).getTime();
-                    return timeB - timeA;
-                });
-                
-                const latestLog = connectionLogs[0];
-                isConnectedFromLogs = latestLog.status === 'connected';
-                connectionTimestamp = latestLog.timestamp;
-            }
-        } catch (logErr) {
-            console.error('[CLOUD] Error reading logs for status:', logErr.message);
-        }
-        
-        // Also check current client status
-        const isConnectedFromClient = cloudflareClient && cloudflareClient.isConnected;
-        
-        // Use log file status if available, otherwise fall back to client status
-        const isConnected = isConnectedFromLogs || isConnectedFromClient;
-        
-        res.json({
-            connected: isConnected,
-            hasConfig,
-            baseUrl,
-            standaloneMode,
-            connectionTimestamp,
-            syncInterval: cloudflareClient ? cloudflareClient.syncInterval : null,
-            queueProcessInterval: cloudflareClient ? cloudflareClient.queueProcessInterval : null
-        });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to get Cloudflare status', details: err.message });
-    }
-});
-
-// Get Cloudflare sync logs (handles rotated log files)
-app.get('/api/cloud/logs', (req, res) => {
-    try {
-        let allLogs = [];
-        let fileIndex = 0;
-        const baseName = CLOUDFLARE_LOGS_FILE.replace('.json', '');
-        
-        // Read all rotated log files
-        while (true) {
-            let logFile;
-            if (fileIndex === 0) {
-                logFile = CLOUDFLARE_LOGS_FILE;
-            } else {
-                logFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
-            }
-            
-            if (!fs.existsSync(logFile)) {
-                break;
-            }
-            
-            try {
-                const fileContent = fs.readFileSync(logFile, 'utf8');
-                if (fileContent.trim()) {
-                    const fileLogs = JSON.parse(fileContent);
-                    if (Array.isArray(fileLogs)) {
-                        allLogs = allLogs.concat(fileLogs);
-                    }
-                }
-            } catch (e) {
-                console.error(`[CLOUD] Failed to read log file ${logFile}:`, e.message);
-            }
-            
-            fileIndex++;
-            if (fileIndex > 100) break; // Safety limit
-        }
-        
-        // Sort by timestamp (most recent first)
-        allLogs.sort((a, b) => {
-            const timeA = new Date(a.timestamp || 0).getTime();
-            const timeB = new Date(b.timestamp || 0).getTime();
-            return timeB - timeA;
-        });
-        
-        // Pagination
-        const page = parseInt(req.query.page) || 1;
-        const pageSize = parseInt(req.query.pageSize) || 50;
-        const start = (page - 1) * pageSize;
-        const end = start + pageSize;
-        
-        res.json({
-            logs: allLogs.slice(start, end),
-            total: allLogs.length,
-            page,
-            pageSize,
-            totalPages: Math.ceil(allLogs.length / pageSize),
-            totalFiles: fileIndex
-        });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to get Cloudflare logs', details: err.message });
-    }
-});
-
-// Get Cloudflare messages (sent via gateway, handles rotated files)
-app.get('/api/cloud/messages', (req, res) => {
-    try {
-        let allMessages = [];
-        let fileIndex = 0;
-        const baseName = CLOUDFLARE_MESSAGES_FILE.replace('.json', '');
-        
-        // Read all rotated message files
-        while (true) {
-            let messageFile;
-            if (fileIndex === 0) {
-                messageFile = CLOUDFLARE_MESSAGES_FILE;
-            } else {
-                messageFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
-            }
-            
-            if (!fs.existsSync(messageFile)) {
-                break;
-            }
-            
-            try {
-                const fileContent = fs.readFileSync(messageFile, 'utf8');
-                if (fileContent.trim()) {
-                    const fileMessages = JSON.parse(fileContent);
-                    if (Array.isArray(fileMessages)) {
-                        allMessages = allMessages.concat(fileMessages);
-                    }
-                }
-            } catch (e) {
-                console.error(`[CLOUD] Failed to read message file ${messageFile}:`, e.message);
-            }
-            
-            fileIndex++;
-            if (fileIndex > 100) break; // Safety limit
-        }
-        
-        // Sort by timestamp (most recent first)
-        allMessages.sort((a, b) => {
-            const timeA = new Date(a.timestamp || a.sentAt || 0).getTime();
-            const timeB = new Date(b.timestamp || b.sentAt || 0).getTime();
-            return timeB - timeA;
-        });
-        
-        // Pagination
-        const page = parseInt(req.query.page) || 1;
-        const pageSize = parseInt(req.query.pageSize) || 50;
-        const start = (page - 1) * pageSize;
-        const end = start + pageSize;
-        
-        res.json({
-            messages: allMessages.slice(start, end),
-            total: allMessages.length,
-            page,
-            pageSize,
-            totalPages: Math.ceil(allMessages.length / pageSize),
-            totalFiles: fileIndex
-        });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to get Cloudflare messages', details: err.message });
-    }
-});
-
-// Get queued messages from Cloudflare
-app.get('/api/cloud/queue', async (req, res) => {
-    try {
-        if (!cloudflareClient || !cloudflareClient.isConnected) {
-            return res.json({ queue: [], total: 0, connected: false });
-        }
-        
-        const userInfo = getUserIdentifier();
-        const queuedMessages = await cloudflareClient.getQueuedMessages(userInfo ? userInfo.id : null);
-        
-        res.json({
-            queue: queuedMessages || [],
-            total: queuedMessages ? queuedMessages.length : 0,
-            connected: true
-        });
-    } catch (err) {
-        console.error('[CLOUD] Failed to get queue:', err);
-        res.status(500).json({ error: 'Failed to get queue', details: err.message });
-    }
-});
-
-// Get channel web links
-app.get('/api/cloud/channels', async (req, res) => {
-    try {
-        if (!cloudflareClient || !cloudflareClient.isConnected) {
-            return res.json({ channels: [], connected: false });
-        }
-        
-        // Get detected channels
-        let channels = [];
-        if (fs.existsSync(DETECTED_CHANNELS_FILE)) {
-            try {
-                const detectedChannels = JSON.parse(fs.readFileSync(DETECTED_CHANNELS_FILE, 'utf8'));
-                channels = Array.isArray(detectedChannels) ? detectedChannels : [];
-            } catch (e) {
-                channels = [];
-            }
-        }
-        
-        const baseUrl = process.env.CLOUDFLARE_BASE_URL || '';
-        const channelLinks = channels.map(channel => ({
-            id: channel.id,
-            name: channel.name || channel.id,
-            type: channel.type || 'channel',
-            webUrl: `${baseUrl}/channel/${encodeURIComponent(channel.id)}`,
-            lastSeen: channel.lastSeen || null
-        }));
-        
-        res.json({
-            channels: channelLinks,
-            total: channelLinks.length,
-            baseUrl,
-            connected: true
-        });
-    } catch (err) {
-        console.error('[CLOUD] Failed to get channels:', err);
-        res.status(500).json({ error: 'Failed to get channels', details: err.message });
-    }
-});
+// Encode channel ID for URL but preserve @ symbol (Cloudflare worker expects @ not %40)
+function encodeChannelIdForUrl(channelId) {
+    // Replace @ with a placeholder, encode, then replace back
+    return encodeURIComponent(channelId.replace(/@/g, '__AT__')).replace(/__AT__/g, '@');
+}
 
 // Test endpoint to populate channel data for demo
 app.post('/api/test/populate-channel', async (req, res) => {
@@ -5952,7 +5715,7 @@ app.post('/api/test/populate-channel', async (req, res) => {
             channelId: testChannelId,
             channelName: testChannelInfo.name,
             messagesAdded: testMessages.length,
-            webpageUrl: `${process.env.CLOUDFLARE_BASE_URL || 'https://your-worker-url.workers.dev'}/channel/${encodeURIComponent(testChannelId)}`
+            webpageUrl: `${process.env.CLOUDFLARE_BASE_URL || 'https://your-worker-url.workers.dev'}/channel/${encodeChannelIdForUrl(testChannelId)}`
         });
     } catch (error) {
         console.error('[TEST] Error populating channel data:', error);

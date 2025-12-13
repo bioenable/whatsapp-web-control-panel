@@ -7,24 +7,17 @@ const channelSendForm = document.getElementById('channel-send-form');
 const channelMessageText = document.getElementById('channel-message-text');
 const channelAttachment = document.getElementById('channel-attachment');
 const refreshChannelsBtn = document.getElementById('refresh-channels-btn');
-const channelFetchMethod = document.getElementById('channel-fetch-method');
+const channelFilterStatus = document.getElementById('channel-filter-status');
 const channelStats = document.getElementById('channel-stats');
 
-// --- Channel Send Options ---
-const channelSendOptions = document.getElementById('channel-send-options');
-const channelSendToAllBtn = document.getElementById('channel-send-to-all-btn');
-const channelSendSpecificBtn = document.getElementById('channel-send-specific-btn');
-const channelIdInput = document.getElementById('channel-id-input');
-const channelSendFormGlobal = document.getElementById('channel-send-form-global');
-const channelMessageTextGlobal = document.getElementById('channel-message-text-global');
-const channelAttachmentGlobal = document.getElementById('channel-attachment-global');
-
 // --- Channels State ---
-let channels = [];
+let channels = []; // All channels loaded from server
+let filteredChannels = []; // Channels filtered by status
 let selectedChannel = null;
 let selectedChannelIsAdmin = false;
 let channelMessages = [];
 let incomingChannelMessages = []; // Messages from channels (not @c.us or @g.us)
+let currentFilter = 'admin'; // Default filter
 
 // HTML escape utility (needed for channels.js)
 function escapeHtml(text) {
@@ -42,10 +35,15 @@ function initializeChannels() {
         });
     }
 
-    // Setup channel fetch method selector
-    if (channelFetchMethod) {
-        channelFetchMethod.addEventListener('change', () => {
-            loadChannels();
+    // Setup channel filter status selector
+    if (channelFilterStatus) {
+        // Set default value to 'admin'
+        channelFilterStatus.value = 'admin';
+        currentFilter = 'admin';
+        
+        channelFilterStatus.addEventListener('change', () => {
+            currentFilter = channelFilterStatus.value;
+            filterChannels();
         });
     }
 
@@ -63,25 +61,6 @@ function initializeChannels() {
         channelSendForm.addEventListener('submit', handleChannelSendMessage);
         channelAttachment.addEventListener('change', renderChannelAttachmentPreview);
     }
-
-    // Setup global channel send options
-    if (channelSendToAllBtn) {
-        channelSendToAllBtn.addEventListener('click', () => {
-            showChannelSendForm('all');
-        });
-    }
-
-    if (channelSendSpecificBtn) {
-        channelSendSpecificBtn.addEventListener('click', () => {
-            showChannelSendForm('specific');
-        });
-    }
-
-    // Setup global channel send form
-    if (channelSendFormGlobal) {
-        channelSendFormGlobal.addEventListener('submit', handleGlobalChannelSendMessage);
-        channelAttachmentGlobal.addEventListener('change', renderGlobalChannelAttachmentPreview);
-    }
 }
 
 // Initialize when DOM is loaded
@@ -94,23 +73,37 @@ if (document.readyState === 'loading') {
 // --- Channels Tab Functions ---
 
 // Load channels from the server
-function loadChannels() {
+async function loadChannels() {
     if (!channelList) return;
     
-    channelHeader.textContent = 'Select a channel';
+    // Reset channel header
+    const channelHeaderName = document.getElementById('channel-header-name');
+    const channelHeaderLink = document.getElementById('channel-header-link');
+    if (channelHeaderName) {
+        channelHeaderName.textContent = 'Select a channel';
+    }
+    if (channelHeaderLink) {
+        channelHeaderLink.innerHTML = '';
+    }
+    // Fallback for old channelHeader
+    if (channelHeader && !channelHeaderName) {
+        channelHeader.textContent = 'Select a channel';
+    }
+    
     channelMessageContainer.innerHTML = '';
     channelSendForm.classList.add('hidden');
     selectedChannel = null;
     
-    // Try multiple methods to get channels
-    Promise.allSettled([
-        // Method 1: Enhanced channels API (followed channels)
-        fetch('/api/channels/enhanced?method=followed').then(r => r.json()),
-        // Method 2: Newsletter channels
-        fetch('/api/channels/enhanced?method=newsletter').then(r => r.json()),
-        // Method 3: Detected channels from message stream
-        fetch('/api/detected-channels').then(r => r.json())
-    ]).then(results => {
+    try {
+        // Try multiple methods to get channels
+        const results = await Promise.allSettled([
+            // Method 1: Enhanced channels API (followed channels)
+            fetch('/api/channels/enhanced?method=followed').then(r => r.json()),
+            // Method 2: Newsletter channels
+            fetch('/api/channels/enhanced?method=newsletter').then(r => r.json()),
+            // Method 3: Detected channels from message stream
+            fetch('/api/detected-channels').then(r => r.json())
+        ]);
         let allChannels = [];
         let methodUsed = 'combined';
         
@@ -139,24 +132,48 @@ function loadChannels() {
         }
         
         // Remove duplicates based on channel ID
+        // When merging, prefer isReadOnly from 'followed' method (most reliable)
         const uniqueChannels = allChannels.reduce((acc, channel) => {
             const existingIndex = acc.findIndex(ch => ch.id === channel.id);
             if (existingIndex === -1) {
                 acc.push(channel);
             } else {
-                // Merge data, preferring more complete information
-                acc[existingIndex] = { ...acc[existingIndex], ...channel };
+                // Merge data, but preserve isReadOnly from followed channels (more reliable)
+                const existing = acc[existingIndex];
+                const isFollowedChannel = channel.type === 'followed';
+                const existingIsFollowed = existing.type === 'followed';
+                
+                // If new channel is from 'followed' method, use its isReadOnly
+                // Otherwise, keep existing isReadOnly if it came from 'followed'
+                const mergedChannel = { ...existing, ...channel };
+                if (isFollowedChannel && existingIsFollowed) {
+                    // Both are followed, use the new one (more recent)
+                    mergedChannel.isReadOnly = channel.isReadOnly;
+                } else if (isFollowedChannel && !existingIsFollowed) {
+                    // New is followed, existing is not - use new isReadOnly
+                    mergedChannel.isReadOnly = channel.isReadOnly;
+                } else if (!isFollowedChannel && existingIsFollowed) {
+                    // Existing is followed, new is not - keep existing isReadOnly
+                    mergedChannel.isReadOnly = existing.isReadOnly;
+                }
+                // If neither is followed, keep the existing isReadOnly
+                
+                acc[existingIndex] = mergedChannel;
             }
             return acc;
         }, []);
         
         channels = uniqueChannels;
-        updateChannelStats({ total: channels.length, method: methodUsed });
-        renderChannelList();
-    }).catch(err => {
+        
+        // Verify and update channel statuses for all channels (batch verify)
+        await verifyAllChannelStatuses();
+        
+        // Apply filter and render (filterChannels will call renderChannelList)
+        filterChannels();
+    } catch (err) {
         console.error('Failed to load channels:', err);
         channelList.innerHTML = `<div class='text-red-600 p-2'>Failed to load channels: ${err.message}</div>`;
-    });
+    }
 }
 
 // Manual channel discovery
@@ -177,34 +194,107 @@ async function discoverChannels() {
     }
 }
 
-// Update channel statistics
-function updateChannelStats(data) {
-    if (!channelStats) return;
+// Filter channels based on status
+function filterChannels() {
+    // Ensure we have the current filter value from the dropdown
+    if (channelFilterStatus) {
+        currentFilter = channelFilterStatus.value;
+    }
     
-    const total = data.total || channels.length;
-    const method = data.method || 'all';
-    const adminCount = channels.filter(c => !c.isReadOnly).length;
-    const readOnlyCount = channels.filter(c => c.isReadOnly).length;
-    
-    channelStats.innerHTML = `
-        Total: ${total} | Admin: ${adminCount} | Read Only: ${readOnlyCount} | Method: ${method}
-    `;
-}
-
-// Render the channel list
-function renderChannelList() {
-    if (!channelList) return;
-    
-    if (!Array.isArray(channels) || channels.length === 0) {
-        channelList.innerHTML = `<div class='text-gray-500 p-2'>No channels found.</div>`;
+    if (!channels || channels.length === 0) {
+        filteredChannels = [];
+        updateChannelStats();
+        renderChannelList();
         return;
     }
     
-    channelList.innerHTML = channels.map(channel => `
+    switch (currentFilter) {
+        case 'admin':
+            filteredChannels = channels.filter(c => c.isReadOnly === false);
+            break;
+        case 'readonly':
+            filteredChannels = channels.filter(c => c.isReadOnly === true);
+            break;
+        case 'all':
+        default:
+            filteredChannels = channels;
+            break;
+    }
+    
+    updateChannelStats();
+    renderChannelList();
+}
+
+// Update channel statistics
+function updateChannelStats() {
+    if (!channelStats) return;
+    
+    const total = channels.length;
+    const adminCount = channels.filter(c => !c.isReadOnly).length;
+    const readOnlyCount = channels.filter(c => c.isReadOnly).length;
+    const filteredCount = filteredChannels.length;
+    
+    channelStats.innerHTML = `
+        Total: ${total} | Admin: ${adminCount} | Read Only: ${readOnlyCount} | Showing: ${filteredCount} (${currentFilter})
+    `;
+}
+
+// Get Cloudflare base URL (cached)
+let cloudflareBaseUrl = null;
+async function getCloudflareBaseUrl() {
+    if (cloudflareBaseUrl) return cloudflareBaseUrl;
+    
+    try {
+        const response = await fetch('/api/cloud/status');
+        const data = await response.json();
+        if (data.baseUrl) {
+            cloudflareBaseUrl = data.baseUrl;
+            return cloudflareBaseUrl;
+        }
+    } catch (error) {
+        console.error('[CHANNELS] Failed to get Cloudflare base URL:', error);
+    }
+    return null;
+}
+
+// Encode channel ID for URL but preserve @ symbol
+function encodeChannelIdForUrl(channelId) {
+    // Replace @ with a placeholder, encode, then replace back
+    return encodeURIComponent(channelId.replace(/@/g, '__AT__')).replace(/__AT__/g, '@');
+}
+
+// Render the channel list
+async function renderChannelList() {
+    if (!channelList) return;
+    
+    if (!Array.isArray(filteredChannels) || filteredChannels.length === 0) {
+        channelList.innerHTML = `<div class='text-gray-500 p-2'>No channels found${currentFilter !== 'all' ? ` (${currentFilter} channels)` : ''}.</div>`;
+        return;
+    }
+    
+    // Get Cloudflare base URL for web links
+    const baseUrl = await getCloudflareBaseUrl();
+    
+    channelList.innerHTML = filteredChannels.map(channel => {
+        const channelWebUrl = baseUrl ? `${baseUrl}/channel/${encodeChannelIdForUrl(channel.id)}` : null;
+        
+        return `
         <div class="p-3 hover:bg-gray-50 cursor-pointer border-b" data-id="${channel.id}">
             <div class="flex justify-between items-start">
                 <div class="flex-1 min-w-0">
-                    <div class="font-semibold text-gray-900 truncate">${channel.name || 'Unnamed Channel'}</div>
+                    <div class="font-semibold text-gray-900 truncate flex items-center gap-2">
+                        ${channel.name || 'Unnamed Channel'}
+                        ${channelWebUrl ? `
+                            <a href="${channelWebUrl}" target="_blank" rel="noopener noreferrer" 
+                               class="text-blue-600 hover:text-blue-800 flex-shrink-0" 
+                               onclick="event.stopPropagation();"
+                               title="Open channel web page">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                                </svg>
+                            </a>
+                        ` : ''}
+                    </div>
                     <div class="text-sm text-gray-500 truncate">${channel.description || 'No description'}</div>
                     <div class="text-xs text-gray-400 mt-1">
                         ID: ${channel.id}
@@ -217,7 +307,7 @@ function renderChannelList() {
                         </div>
                     ` : ''}
                 </div>
-                <div class="text-xs text-gray-400 ml-2">
+                <div class="text-xs text-gray-400 ml-2 channel-status-badge">
                     ${channel.isReadOnly ? 
                         '<span class="inline-block bg-orange-100 text-orange-800 px-1 rounded text-xs">Read Only</span>' : 
                         '<span class="inline-block bg-blue-100 text-blue-800 px-1 rounded text-xs">Admin</span>'
@@ -225,7 +315,8 @@ function renderChannelList() {
                 </div>
             </div>
         </div>
-    `).join('');
+    `;
+    }).join('');
     
     // Add click handlers
     document.querySelectorAll('#channel-list > div').forEach(div => {
@@ -234,19 +325,111 @@ function renderChannelList() {
 }
 
 // Select a channel and load its messages
-function selectChannel(channelId) {
+async function selectChannel(channelId) {
+    // Find channel from all channels (not just filtered)
     const channel = channels.find(c => c.id === channelId);
     if (!channel) return;
     
     selectedChannel = channel;
-    selectedChannelIsAdmin = !channel.isReadOnly;
-    channelHeader.textContent = `${channel.name || channel.id} (${channel.id})`;
+    
+    // Verify channel admin status from server (more reliable than cached data)
+    try {
+        const verifyResponse = await fetch(`/api/channels/${encodeURIComponent(channelId)}/verify`);
+        if (verifyResponse.ok) {
+            const verifyData = await verifyResponse.json();
+            // Update channel object with verified status
+            channel.isReadOnly = verifyData.isReadOnly;
+            selectedChannel.isReadOnly = verifyData.isReadOnly;
+            selectedChannelIsAdmin = !verifyData.isReadOnly;
+        } else {
+            // Fallback to cached data if verification fails
+            selectedChannelIsAdmin = !channel.isReadOnly;
+        }
+    } catch (error) {
+        console.error('[CHANNELS] Failed to verify channel status:', error);
+        // Fallback to cached data
+        selectedChannelIsAdmin = !channel.isReadOnly;
+    }
+    
+    // Update channel header with name
+    const channelHeaderName = document.getElementById('channel-header-name');
+    const channelHeaderLink = document.getElementById('channel-header-link');
+    
+    if (channelHeaderName) {
+        channelHeaderName.textContent = `${channel.name || channel.id} (${channel.id})`;
+    }
+    
+    // Get and display channel web link
+    if (channelHeaderLink) {
+        const baseUrl = await getCloudflareBaseUrl();
+        if (baseUrl) {
+            const channelWebUrl = `${baseUrl}/channel/${encodeChannelIdForUrl(channel.id)}`;
+            channelHeaderLink.innerHTML = `
+                <a href="${channelWebUrl}" target="_blank" rel="noopener noreferrer" 
+                   class="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium flex items-center gap-1">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path>
+                    </svg>
+                    <span class="hidden sm:inline">${channelWebUrl}</span>
+                    <span class="sm:hidden">Open</span>
+                </a>
+            `;
+        } else {
+            channelHeaderLink.innerHTML = '';
+        }
+    }
+    
+    // Fallback: update old channelHeader if it exists (for backward compatibility)
+    if (channelHeader && !channelHeaderName) {
+        channelHeader.textContent = `${channel.name || channel.id} (${channel.id})`;
+    }
+    
+    // Update the channel list display with verified status
+    updateChannelStatusInList(channelId, !selectedChannelIsAdmin);
+    
     loadChannelMessages(channel.id);
     
     if (selectedChannelIsAdmin) {
         channelSendForm.classList.remove('hidden');
     } else {
         channelSendForm.classList.add('hidden');
+    }
+}
+
+// Verify all channel statuses from server (batch operation)
+async function verifyAllChannelStatuses() {
+    // Verify channels in batches to avoid overwhelming the server
+    const batchSize = 5;
+    for (let i = 0; i < channels.length; i += batchSize) {
+        const batch = channels.slice(i, i + batchSize);
+        await Promise.allSettled(
+            batch.map(async (channel) => {
+                try {
+                    const response = await fetch(`/api/channels/${encodeURIComponent(channel.id)}/verify`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        // Update channel with verified status
+                        channel.isReadOnly = data.isReadOnly;
+                    }
+                } catch (error) {
+                    console.error(`[CHANNELS] Failed to verify channel ${channel.id}:`, error);
+                    // Keep existing status if verification fails
+                }
+            })
+        );
+    }
+}
+
+// Update channel status badge in the list
+function updateChannelStatusInList(channelId, isReadOnly) {
+    const channelElement = document.querySelector(`#channel-list > div[data-id="${channelId}"]`);
+    if (channelElement) {
+        const statusBadge = channelElement.querySelector('.channel-status-badge');
+        if (statusBadge) {
+            statusBadge.innerHTML = isReadOnly ? 
+                '<span class="inline-block bg-orange-100 text-orange-800 px-1 rounded text-xs">Read Only</span>' : 
+                '<span class="inline-block bg-blue-100 text-blue-800 px-1 rounded text-xs">Admin</span>';
+        }
     }
 }
 
@@ -367,125 +550,6 @@ function renderChannelAttachmentPreview() {
     console.log('Channel attachment selected:', file.name, file.type);
 }
 
-// Show channel send form based on type (all or specific)
-function showChannelSendForm(type) {
-    if (!channelSendFormGlobal || !channelSendOptions) return;
-    
-    if (type === 'all') {
-        channelSendFormGlobal.style.display = 'block';
-        channelSendOptions.style.display = 'none';
-        channelIdInput.style.display = 'none';
-        channelMessageTextGlobal.placeholder = 'Enter message to send to all channels where you are admin...';
-    } else if (type === 'specific') {
-        channelSendFormGlobal.style.display = 'block';
-        channelSendOptions.style.display = 'none';
-        channelIdInput.style.display = 'block';
-        channelMessageTextGlobal.placeholder = 'Enter message to send to specific channel...';
-    }
-    
-    channelMessageTextGlobal.focus();
-}
-
-// Handle global channel send message
-function handleGlobalChannelSendMessage(event) {
-    event.preventDefault();
-    
-    const message = channelMessageTextGlobal.value.trim();
-    const attachment = channelAttachmentGlobal.files[0];
-    const channelId = channelIdInput ? channelIdInput.value.trim() : '';
-    
-    if (!message && !attachment) {
-        alert('Please enter a message or attach a file');
-        return;
-    }
-    
-    // Determine if sending to all or specific channel
-    const sendToAll = !channelId || channelId === '';
-    
-    if (!sendToAll && !channelId) {
-        alert('Please enter a channel ID');
-        return;
-    }
-    
-    const formData = new FormData();
-    formData.append('message', message);
-    if (attachment) {
-        formData.append('media', attachment);
-    }
-    if (sendToAll) {
-        formData.append('sendToAll', 'true');
-    } else {
-        formData.append('channelId', channelId);
-    }
-    
-    // Disable send button
-    const sendBtn = channelSendFormGlobal.querySelector('button[type="submit"]');
-    const originalText = sendBtn.textContent;
-    sendBtn.disabled = true;
-    sendBtn.textContent = 'Sending...';
-    
-    fetch('/api/channels/send', {
-        method: 'POST',
-        body: formData
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            channelMessageTextGlobal.value = '';
-            channelAttachmentGlobal.value = '';
-            if (channelIdInput) channelIdInput.value = '';
-            
-            // Show results
-            const summary = data.summary;
-            const message = `Message sent successfully!\n\nSummary:\n- Total: ${summary.total}\n- Successful: ${summary.successful}\n- Failed: ${summary.failed}`;
-            
-            if (summary.failed > 0) {
-                const failedDetails = data.results.filter(r => !r.success)
-                    .map(r => `${r.channelName || r.channelId}: ${r.error}`)
-                    .join('\n');
-                alert(message + '\n\nFailed channels:\n' + failedDetails);
-            } else {
-                alert(message);
-            }
-            
-            // Reset form display
-            if (channelSendOptions) channelSendOptions.style.display = 'block';
-            if (channelSendFormGlobal) channelSendFormGlobal.style.display = 'none';
-            if (channelIdInput) channelIdInput.style.display = 'none';
-            
-        } else {
-            alert('Failed to send message: ' + (data.error || 'Unknown error'));
-        }
-    })
-    .catch(err => {
-        console.error('Send to channels error:', err);
-        alert('Failed to send message: ' + err.message);
-    })
-    .finally(() => {
-        sendBtn.disabled = false;
-        sendBtn.textContent = originalText;
-    });
-}
-
-// Handle global channel attachment preview
-function renderGlobalChannelAttachmentPreview() {
-    const file = channelAttachmentGlobal.files[0];
-    if (!file) return;
-    
-    console.log('Global channel attachment selected:', file.name, file.type);
-}
-
-// Cancel channel send form
-function cancelChannelSend() {
-    if (channelSendFormGlobal) channelSendFormGlobal.style.display = 'none';
-    if (channelSendOptions) channelSendOptions.style.display = 'block';
-    if (channelIdInput) channelIdInput.style.display = 'none';
-    if (channelMessageTextGlobal) channelMessageTextGlobal.value = '';
-    if (channelAttachmentGlobal) channelAttachmentGlobal.value = '';
-}
-
-// Make cancelChannelSend globally accessible
-window.cancelChannelSend = cancelChannelSend;
 
 // Load incoming channel messages (messages not from @c.us or @g.us)
 function loadIncomingChannelMessages() {
@@ -600,23 +664,24 @@ function replyToChannelMessage(senderId, messageId) {
     }
 }
 
-// Send to a specific channel (opens the send form with pre-filled channel ID)
+// Send to a specific channel (selects the channel in the channels tab)
 function sendToChannel(channelId) {
-    if (!channelSendSpecificBtn) return;
-    
-    // Show the specific channel send form
-    showChannelSendForm('specific');
-    
-    // Pre-fill the channel ID
-    if (channelIdInput) {
-        channelIdInput.querySelector('input').value = channelId;
+    // Switch to channels tab
+    const channelsTab = document.getElementById('channels-tab');
+    if (channelsTab) {
+        channelsTab.click();
     }
     
-    // Focus on message text
-    if (channelMessageTextGlobal) {
-        channelMessageTextGlobal.focus();
-        channelMessageTextGlobal.placeholder = `Send message to ${channelId}...`;
-    }
+    // Select the channel
+    setTimeout(() => {
+        selectChannel(channelId);
+        // Focus on message input
+        if (channelMessageText) {
+            setTimeout(() => {
+                channelMessageText.focus();
+            }, 200);
+        }
+    }, 100);
 }
 
 // Make functions globally accessible
