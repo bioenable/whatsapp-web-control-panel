@@ -12,7 +12,11 @@ const channelStats = document.getElementById('channel-stats');
 
 // --- Channels State ---
 let channels = []; // All channels loaded from server
+// Expose channels globally for other modules
+window.channels = channels;
 let filteredChannels = []; // Channels filtered by status
+// Expose filteredChannels globally for other modules
+window.filteredChannels = filteredChannels;
 let selectedChannel = null;
 let selectedChannelIsAdmin = false;
 let channelMessages = [];
@@ -164,12 +168,16 @@ async function loadChannels() {
         }, []);
         
         channels = uniqueChannels;
+        window.channels = channels; // Update global reference
         
         // Verify and update channel statuses for all channels (batch verify)
         await verifyAllChannelStatuses();
         
         // Apply filter and render (filterChannels will call renderChannelList)
         filterChannels();
+        
+        // Update global filteredChannels reference
+        window.filteredChannels = filteredChannels;
     } catch (err) {
         console.error('Failed to load channels:', err);
         channelList.innerHTML = `<div class='text-red-600 p-2'>Failed to load channels: ${err.message}</div>`;
@@ -223,6 +231,9 @@ function filterChannels() {
     
     updateChannelStats();
     renderChannelList();
+    
+    // Update global filteredChannels reference
+    window.filteredChannels = filteredChannels;
 }
 
 // Update channel statistics

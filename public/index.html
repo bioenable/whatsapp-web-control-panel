@@ -95,6 +95,11 @@
                         Leads
                     </button>
                 </li>
+                <li class="-mb-px mr-2">
+                    <button class="tab-link inline-block py-2 px-4 text-gray-600 hover:text-green-700 border-b-2 border-transparent hover:border-green-700 font-semibold" id="backup-tab" data-tab="backup" type="button" role="tab" aria-controls="backup" aria-selected="false">
+                        Backup
+                    </button>
+                </li>
             </ul>
             <div id="tab-content">
                 <div id="chats" class="tab-pane">
@@ -967,6 +972,100 @@ One contact per line. Names will be automatically split if using Format 1."></te
                         </div>
                     </div>
                 </div>
+                
+                <!-- Backup Section -->
+                <div id="backup" class="tab-pane hidden">
+                    <div class="bg-white rounded shadow p-6">
+                        <div class="flex items-center justify-between mb-6">
+                            <div>
+                                <h2 class="text-xl font-semibold">Chat Backup Management</h2>
+                                <p class="text-gray-600 text-sm">Backup and restore chat messages from Private Chats, Groups, and Channels</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Add Backup Form -->
+                        <div class="mb-6 p-4 bg-gray-50 rounded-lg border">
+                            <h3 class="text-lg font-semibold mb-4">Add Chat to Backup</h3>
+                            <form id="backup-add-form" class="space-y-4">
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium mb-1">Chat Type</label>
+                                        <select id="backup-chat-type" class="w-full border rounded px-3 py-2" required>
+                                            <option value="">Select Type</option>
+                                            <option value="private">Private Chat</option>
+                                            <option value="group">Group Chat</option>
+                                            <option value="channel">Channel</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium mb-1">Chat Name</label>
+                                        <select id="backup-chat-select" class="w-full border rounded px-3 py-2" required>
+                                            <option value="">-- Select Chat --</option>
+                                        </select>
+                                        <input type="hidden" id="backup-chat-id" />
+                                    </div>
+                                </div>
+                                <button type="submit" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                                    Add to Backup List
+                                </button>
+                            </form>
+                        </div>
+                        
+                        <!-- Backup List Tabs -->
+                        <div class="mb-4 border-b">
+                            <div class="flex space-x-4">
+                                <button id="backup-list-tab" class="px-4 py-2 border-b-2 border-green-600 font-semibold text-green-700">
+                                    Backup List
+                                </button>
+                                <button id="backup-people-tab" class="px-4 py-2 text-gray-600 hover:text-green-700">
+                                    People
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Backup List View -->
+                        <div id="backup-list-view">
+                            <div id="backup-list-container" class="space-y-3">
+                                <div class="text-center text-gray-500 py-8">Loading backups...</div>
+                            </div>
+                        </div>
+                        
+                        <!-- People View -->
+                        <div id="backup-people-view" class="hidden">
+                            <div class="mb-4 flex justify-between items-center">
+                                <div class="text-sm text-gray-600" id="backup-people-count">0 people</div>
+                                <button id="backup-add-all-contacts-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
+                                    Add All to Contacts
+                                </button>
+                            </div>
+                            <div id="backup-people-container" class="space-y-2">
+                                <div class="text-center text-gray-500 py-8">Select a backup to view people</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Backup Messages Modal -->
+                    <div id="backup-messages-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+                        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+                            <div class="p-4 border-b flex justify-between items-center">
+                                <h3 class="text-lg font-semibold" id="backup-messages-title">Backup Messages</h3>
+                                <button id="backup-messages-close" class="text-gray-500 hover:text-gray-700">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div id="backup-messages-content" class="flex-1 overflow-y-auto p-4 bg-gray-50">
+                                <div class="text-center text-gray-500 py-8">Loading messages...</div>
+                            </div>
+                            <div class="p-4 border-t flex justify-between items-center">
+                                <button id="backup-messages-prev" class="px-4 py-2 border rounded disabled:opacity-50" disabled>Previous</button>
+                                <span id="backup-messages-page-info" class="text-sm text-gray-600">Page 1 of 1</span>
+                                <button id="backup-messages-next" class="px-4 py-2 border rounded disabled:opacity-50" disabled>Next</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -976,6 +1075,7 @@ One contact per line. Names will be automatically split if using Format 1."></te
     <script src="/js/contacts.js"></script>
     <script src="/js/automate.js"></script>
     <script src="/js/leads.js"></script>
+    <script src="/js/backup.js"></script>
     <script>
       // URL routing for tabs
       function switchToTab(tabName, updateUrl = true) {
@@ -1017,6 +1117,12 @@ One contact per line. Names will be automatically split if using Format 1."></te
         const hash = window.location.hash.substring(1);
         if (hash) {
           switchToTab(hash, false);
+          // If backup tab, trigger loadBackupList after a short delay
+          if (hash === 'backup' && typeof loadBackupList === 'function') {
+            setTimeout(() => {
+              loadBackupList();
+            }, 300);
+          }
         }
       });
       

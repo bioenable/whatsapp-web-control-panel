@@ -16,9 +16,13 @@ const LEADS_FILE = path.join(__dirname, 'leads.json');
 const LEADS_CONFIG_FILE = path.join(__dirname, 'leads-config.json');
 const CLOUDFLARE_LOGS_FILE = path.join(__dirname, 'cloudflare_logs.json');
 const CLOUDFLARE_MESSAGES_FILE = path.join(__dirname, 'cloudflare_messages.json');
+const BACKUP_DIR = path.join(__dirname, 'backups');
+const BACKUP_LIST_FILE = path.join(__dirname, 'backup_list.json');
+const { setupBackupRoutes } = require('./backup.js');
 const fetch = require('node-fetch'); // Add at the top with other requires
 const TEMPLATE_MEDIA_DIR = path.join(__dirname, 'public', 'message-templates');
 if (!fs.existsSync(TEMPLATE_MEDIA_DIR)) fs.mkdirSync(TEMPLATE_MEDIA_DIR, { recursive: true });
+if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
 const templateMediaUpload = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, TEMPLATE_MEDIA_DIR),
@@ -712,7 +716,9 @@ async function ensureContactExists(chatId, contactName) {
     const phoneNumber = chatId.replace('@c.us', '');
     
     // Create contact using WhatsApp's contact creation method
-    await client.saveOrEditAddressbookContact(phoneNumber, contactName, '', false);
+    // v1.34.2+ fix: firstName must never be empty, use number as fallback if needed
+    const firstName = contactName && contactName.trim() ? contactName.trim() : phoneNumber;
+    await client.saveOrEditAddressbookContact(phoneNumber, firstName, '', true); // syncToAddressbook = true (as per wwebjs docs)
     
     console.log(`[CONTACT-CHECK] Successfully created contact: ${contactName} (${chatId})`);
     
@@ -918,48 +924,115 @@ initializeJsonFiles();
 const genAI = new GoogleGenAI({});
 const groundingTool = { googleSearch: {} };
 const genAIConfig = { tools: [groundingTool], maxOutputTokens: 512 };
+
+/**
+ * Step 2: Parse the response from step 1 into structured JSON format
+ * Uses gemini-2.5-flash-lite model without tools to reduce cost
+ */
+async function parseResponseToJson(step1Response) {
+  const jsonSchema = {
+    type: 'object',
+    properties: {
+      message: {
+        type: 'string',
+        description: 'The clean message text to send to WhatsApp, without any commentary, notes, or explanations'
+      },
+      hasNewMessage: {
+        type: 'boolean',
+        description: 'true if there is a unique new message to send, false if no new content or duplicate'
+      },
+      notes: {
+        type: 'string',
+        description: 'Optional internal notes or commentary (not to be sent)'
+      }
+    },
+    required: ['message', 'hasNewMessage']
+  };
+
+  const sampleJson = {
+    message: "Hello! This is a sample message that will be sent to WhatsApp.",
+    hasNewMessage: true,
+    notes: "Optional notes about the message generation"
+  };
+
+  const parsePrompt = `You are a JSON parser. Your task is to analyze the following AI-generated response and extract/format it into a structured JSON object.
+
+AI Response to parse:
+${step1Response}
+
+JSON Schema:
+${JSON.stringify(jsonSchema, null, 2)}
+
+Example JSON format:
+${JSON.stringify(sampleJson, null, 2)}
+
+Instructions:
+1. Extract the main message content that should be sent to WhatsApp and put it in the "message" field
+2. Determine if there is a unique new message to send (hasNewMessage: true) or if it's a duplicate/no new content (hasNewMessage: false)
+3. Put any commentary, explanations, or notes in the "notes" field (not in the message field)
+4. The "message" field must contain ONLY the clean text to be sent, with no commentary or explanations
+5. Return ONLY a valid JSON object matching the schema above, no other text
+
+IMPORTANT: Respond with ONLY the JSON object, no markdown, no code blocks, just the raw JSON.`;
+
+  try {
+    const config = {
+      responseMimeType: 'application/json',
+      maxOutputTokens: 512
+    };
+
+    const response = await genAI.models.generateContent({
+      model: 'gemini-2.5-flash-lite',
+      contents: parsePrompt,
+      config
+    });
+
+    const responseText = response.text.trim();
+    
+    // Parse the JSON response
+    let jsonText = responseText;
+    // Remove markdown code blocks if present
+    if (jsonText.startsWith('```json')) {
+      jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+    } else if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```$/, '');
+    }
+
+    const parsed = JSON.parse(jsonText);
+    return {
+      message: parsed.message || step1Response,
+      hasNewMessage: parsed.hasNewMessage !== false, // Default to true if not specified
+      notes: parsed.notes || ''
+    };
+  } catch (err) {
+    console.error('[GenAI] Step 2 (JSON parsing) failed:', err.message);
+    if (err.status) {
+      console.error('[GenAI] Step 2 error status:', err.status);
+    }
+    if (err.response) {
+      console.error('[GenAI] Step 2 error response:', JSON.stringify(err.response, null, 2));
+    }
+    // Return null to indicate failure, so we can fall back to step 1 response
+    return null;
+  }
+}
+
 async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessage, useJsonMode = false }) {
   // Compose prompt for grounding
   let contents = `${systemPrompt}\n\nChat history:\n${chatHistory}\n\nUser: ${userMessage}\n\n${autoReplyPrompt}`;
   
-  // For JSON mode, add schema instructions to the prompt
-  if (useJsonMode) {
-    const jsonSchema = {
-      type: 'object',
-      properties: {
-        message: {
-          type: 'string',
-          description: 'The clean message text to send to WhatsApp, without any commentary, notes, or explanations'
-        },
-        hasNewMessage: {
-          type: 'boolean',
-          description: 'true if there is a unique new message to send, false if no new content or duplicate'
-        },
-        notes: {
-          type: 'string',
-          description: 'Optional internal notes or commentary (not to be sent)'
-        }
-      },
-      required: ['message', 'hasNewMessage']
-    };
-    
-    contents += `\n\nIMPORTANT: You must respond with ONLY a valid JSON object matching this schema:\n${JSON.stringify(jsonSchema, null, 2)}\n\nReturn ONLY the JSON object, no other text. The "message" field should contain ONLY the text to be sent to WhatsApp, with no commentary, explanations, or notes. Any commentary should go in the "notes" field.`;
-  }
-  
   try {
     const config = { ...genAIConfig };
     
-    // For JSON mode, use responseMimeType if supported, otherwise rely on prompt instructions
+    // For JSON mode: Step 1 - Call with tools enabled but WITHOUT responseMimeType
+    // This avoids the error: "Tool use with a response mime type: 'application/json' is unsupported"
     if (useJsonMode) {
-      // Try to set response format to JSON
-      try {
-        config.responseMimeType = 'application/json';
-      } catch (e) {
-        // If not supported, rely on prompt instructions
-        console.log('[GenAI] JSON mode: Using prompt-based JSON formatting');
-      }
+      // DO NOT set responseMimeType here when tools are enabled
+      // We'll parse the response in step 2
+      console.log('[GenAI] Step 1: Calling with tools enabled (no JSON forcing)');
     }
     
+    // Step 1: Call with tools (Google Search) enabled
     const response = await genAI.models.generateContent({
       model: process.env.GOOGLE_MODEL || 'gemini-2.5-flash',
       contents,
@@ -968,35 +1041,27 @@ async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessa
     
     const responseText = response.text;
     
-    // If JSON mode, parse and extract message
+    // If JSON mode, proceed to step 2: Parse response to JSON
     if (useJsonMode) {
-      try {
-        // Try to extract JSON from response (might have markdown code blocks)
-        let jsonText = responseText.trim();
-        if (jsonText.startsWith('```json')) {
-          jsonText = jsonText.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-        } else if (jsonText.startsWith('```')) {
-          jsonText = jsonText.replace(/^```\s*/, '').replace(/\s*```$/, '');
-        }
-        
-        const parsed = JSON.parse(jsonText);
-        return {
-          message: parsed.message || responseText,
-          hasNewMessage: parsed.hasNewMessage !== false, // Default to true if not specified
-          notes: parsed.notes || ''
-        };
-      } catch (parseErr) {
-        console.error('[GenAI] Failed to parse JSON response:', parseErr);
-        console.error('[GenAI] Raw response:', responseText);
-        // Fallback: return the text as message
+      console.log('[GenAI] Step 2: Parsing response to JSON using gemini-2.5-flash-lite');
+      const parsedResult = await parseResponseToJson(responseText);
+      
+      if (parsedResult) {
+        // Step 2 succeeded
+        console.log('[GenAI] Step 2 succeeded: JSON parsed successfully');
+        return parsedResult;
+      } else {
+        // Step 2 failed, fall back to step 1 response
+        console.log('[GenAI] Step 2 failed, falling back to step 1 response');
         return {
           message: responseText,
           hasNewMessage: true,
-          notes: 'Failed to parse JSON response'
+          notes: 'Step 2 JSON parsing failed, using raw response from step 1'
         };
       }
     }
     
+    // Non-JSON mode: return plain text
     return responseText;
   } catch (err) {
     console.error('[GenAI] Error:', err);
@@ -2587,7 +2652,8 @@ app.get('/api/chats', async (req, res) => {
             id: chat.id._serialized,
             name: chat.name || chat.formattedTitle || chat.id.user,
             isGroup: chat.isGroup,
-            unreadCount: chat.unreadCount
+            unreadCount: chat.unreadCount,
+            timestamp: chat.timestamp || (chat.lastMessage ? chat.lastMessage.timestamp : 0) || 0
         })));
     } catch (err) {
         console.error('Failed to fetch chats after retries:', err);
@@ -4881,11 +4947,15 @@ app.post('/api/contacts/add-multiple', async (req, res) => {
                 }
                 
                 if (!contactExists) {
+                    // v1.34.2+ fix: firstName must never be empty
+                    const finalFirstName = (firstName && firstName.trim()) ? firstName.trim() : normalizedNumber;
+                    const finalLastName = (lastName && lastName.trim()) ? lastName.trim() : '';
+                    
                     // Add contact using saveOrEditAddressbookContact
                     const contactChatId = await client.saveOrEditAddressbookContact(
                         normalizedNumber,
-                        firstName || '',
-                        lastName || '',
+                        finalFirstName,  // Must not be empty
+                        finalLastName,
                         true // syncToAddressbook = true
                     );
                     
@@ -5114,11 +5184,15 @@ app.post('/api/contacts/add', async (req, res) => {
             
             console.log('Parsed name:', { firstName, lastName, originalName: name });
             
+            // v1.34.2+ fix: firstName must never be empty (Nov 2025 fix)
+            const finalFirstName = (firstName && firstName.trim()) ? firstName.trim() : normalizedNumber;
+            const finalLastName = (lastName && lastName.trim()) ? lastName.trim() : '';
+            
             // Call saveOrEditAddressbookContact with syncToAddressbook = true
             const chatId = await client.saveOrEditAddressbookContact(
                 normalizedNumber, 
-                firstName, 
-                lastName, 
+                finalFirstName,  // Must not be empty (v1.34.2+ fix)
+                finalLastName, 
                 true // syncToAddressbook = true
             );
             
@@ -5946,6 +6020,9 @@ app.post('/api/cloudflare/process-queue', async (req, res) => {
         });
     }
 });
+
+// Setup backup routes (pass ready as getter function)
+setupBackupRoutes(app, client, () => ready, BACKUP_DIR, BACKUP_LIST_FILE, readJson, writeJson, DETECTED_CHANNELS_FILE);
 
 // Error handling middleware for multer errors
 app.use((error, req, res, next) => {

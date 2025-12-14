@@ -51,6 +51,8 @@ const previewTemplateBtn = document.getElementById('preview-template-btn');
 // State
 let currentStatus = 'initializing';
 let chats = [];
+// Expose chats globally for other modules
+window.chats = chats;
 let selectedChatId = null; // for chat list selection
 let selectedChatIds = [];  // for send message multi-select
 let templates = [];
@@ -394,6 +396,7 @@ function loadChats() {
                 throw new Error('Invalid response format: expected array');
             }
             chats = data;
+            window.chats = chats; // Update global reference
             console.log(`Loaded ${chats.length} chats`);
             renderChatList();
             populateRecipientSelect();

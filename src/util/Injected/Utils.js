@@ -641,21 +641,36 @@ exports.LoadUtils = () => {
         }
 
         // Safely call ContactMethods functions, with fallbacks if methods don't exist
+        // v1.34.2+ compatibility: Some methods may not exist or may not be functions
         const ContactMethods = window.Store.ContactMethods || {};
-        res.isMe = ContactMethods.getIsMe ? ContactMethods.getIsMe(contact) : (contact.isMe || false);
-        res.isUser = ContactMethods.getIsUser ? ContactMethods.getIsUser(contact) : (contact.isUser || false);
-        res.isGroup = ContactMethods.getIsGroup ? ContactMethods.getIsGroup(contact) : (contact.isGroup || false);
-        res.isWAContact = ContactMethods.getIsWAContact ? ContactMethods.getIsWAContact(contact) : (contact.isWAContact || false);
-        res.isMyContact = ContactMethods.getIsMyContact ? ContactMethods.getIsMyContact(contact) : (contact.isMyContact || contact.isContact || false);
+        
+        // Helper to safely call ContactMethods functions
+        const safeCall = (methodName, fallback) => {
+            try {
+                const method = ContactMethods[methodName];
+                if (method && typeof method === 'function') {
+                    return method(contact);
+                }
+            } catch (e) {
+                // Method doesn't exist or failed, use fallback
+            }
+            return fallback;
+        };
+        
+        res.isMe = safeCall('getIsMe', contact.isMe || false);
+        res.isUser = safeCall('getIsUser', contact.isUser || false);
+        res.isGroup = safeCall('getIsGroup', contact.isGroup || false);
+        res.isWAContact = safeCall('getIsWAContact', contact.isWAContact || false);
+        res.isMyContact = safeCall('getIsMyContact', contact.isMyContact || contact.isContact || false);
         res.isBlocked = contact.isContactBlocked || false;
-        res.userid = ContactMethods.getUserid ? ContactMethods.getUserid(contact) : (contact.id?.user || contact.userid || '');
-        res.isEnterprise = ContactMethods.getIsEnterprise ? ContactMethods.getIsEnterprise(contact) : (contact.isEnterprise || false);
-        res.verifiedName = ContactMethods.getVerifiedName ? ContactMethods.getVerifiedName(contact) : (contact.verifiedName || null);
-        res.verifiedLevel = ContactMethods.getVerifiedLevel ? ContactMethods.getVerifiedLevel(contact) : (contact.verifiedLevel || null);
-        res.statusMute = ContactMethods.getStatusMute ? ContactMethods.getStatusMute(contact) : (contact.statusMute || false);
-        res.name = ContactMethods.getName ? ContactMethods.getName(contact) : (contact.name || contact.pushname || null);
-        res.shortName = ContactMethods.getShortName ? ContactMethods.getShortName(contact) : (contact.shortName || res.name || null);
-        res.pushname = ContactMethods.getPushname ? ContactMethods.getPushname(contact) : (contact.pushname || null);
+        res.userid = safeCall('getUserid', contact.id?.user || contact.userid || '');
+        res.isEnterprise = safeCall('getIsEnterprise', contact.isEnterprise || false);
+        res.verifiedName = safeCall('getVerifiedName', contact.verifiedName || null);
+        res.verifiedLevel = safeCall('getVerifiedLevel', contact.verifiedLevel || null);
+        res.statusMute = safeCall('getStatusMute', contact.statusMute || false);
+        res.name = safeCall('getName', contact.name || contact.pushname || null);
+        res.shortName = safeCall('getShortName', contact.shortName || res.name || null);
+        res.pushname = safeCall('getPushname', contact.pushname || null);
 
         return res;
     };
