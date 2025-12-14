@@ -465,6 +465,16 @@
                             </div>
                         </div>
                         
+                        <!-- Warning Message -->
+                        <div class="mb-4">
+                            <div class="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-sm mb-2">
+                                <strong>⚠️ Important Notice:</strong> WhatsApp Web does not support adding/editing contacts. If you add any contacts it may show temporarily only and may not sync with WhatsApp. Many a times you may see the number is there in WhatsApp contact but without any name.
+                            </div>
+                            <div class="p-3 bg-green-50 border border-green-200 rounded text-green-700 text-sm">
+                                <strong>💡 Tip:</strong> Download contacts as csv and import in your Google contacts to automatically sync them to Whatsapp also.
+                            </div>
+                        </div>
+                        
                         <!-- Add Contacts Form -->
                         <div id="add-contacts-form" class="mb-6 bg-white rounded shadow p-4 hidden">
                             <div class="flex justify-between items-center mb-4">
@@ -755,6 +765,11 @@ One contact per line. Names will be automatically split if using Format 1."></te
                                     </svg>
                                     <span class="text-sm">Add Contacts</span>
                                 </button>
+                                <button id="leads-download-csv-btn" class="bg-green-600 text-white p-3 rounded hover:bg-green-700 transition-colors" title="Download Leads as Google Contacts CSV">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+                                    </svg>
+                                </button>
                                 <button id="leads-refresh-btn" class="bg-green-600 text-white p-3 rounded hover:bg-green-700 transition-colors" title="Refresh Leads Data">
                                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
@@ -769,13 +784,31 @@ One contact per line. Names will be automatically split if using Format 1."></te
                             </div>
                         </div>
 
-                        <div class="flex items-center justify-between mb-4">
-                            <div class="flex items-center space-x-4">
+                        <div class="mb-4">
+                            <div class="flex items-center justify-between mb-4">
                                 <div class="text-sm text-gray-600" id="leads-count">0 leads</div>
-                                <div class="flex items-center space-x-2">
+                            </div>
+                            <div class="flex flex-wrap gap-4 mb-4">
+                                <div class="flex-1 min-w-[200px]">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Search (All Fields)</label>
                                     <input type="text" id="leads-search" placeholder="Search leads..." 
-                                           class="border rounded px-3 py-1 text-sm w-64">
-                                    <select id="leads-filter" class="border rounded px-3 py-1 text-sm">
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                                <div class="flex-1 min-w-[200px]">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Filter by Enquiry Source</label>
+                                    <select id="leads-filter-enquiry-source" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                        <option value="">All Enquiry Sources</option>
+                                    </select>
+                                </div>
+                                <div class="flex-1 min-w-[200px]">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Filter by Domain</label>
+                                    <select id="leads-filter-domain" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                        <option value="">All Domains</option>
+                                    </select>
+                                </div>
+                                <div class="flex-1 min-w-[150px]">
+                                    <label class="block text-sm font-medium text-gray-700 mb-1">Filter by Type</label>
+                                    <select id="leads-filter" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
                                         <option value="all">All Types</option>
                                         <option value="Registration">Registration</option>
                                         <option value="Inquiry">Inquiry</option>
@@ -802,6 +835,9 @@ One contact per line. Names will be automatically split if using Format 1."></te
                                 </tbody>
                             </table>
                         </div>
+                        
+                        <!-- Pagination Container -->
+                        <div id="leads-pagination" class="mt-4"></div>
                         
                         <!-- Add Contacts Progress Alerts -->
                         <div id="leads-add-contacts-alerts" class="mt-4 space-y-2">
@@ -1011,35 +1047,10 @@ One contact per line. Names will be automatically split if using Format 1."></te
                             </form>
                         </div>
                         
-                        <!-- Backup List Tabs -->
-                        <div class="mb-4 border-b">
-                            <div class="flex space-x-4">
-                                <button id="backup-list-tab" class="px-4 py-2 border-b-2 border-green-600 font-semibold text-green-700">
-                                    Backup List
-                                </button>
-                                <button id="backup-people-tab" class="px-4 py-2 text-gray-600 hover:text-green-700">
-                                    People
-                                </button>
-                            </div>
-                        </div>
-                        
                         <!-- Backup List View -->
                         <div id="backup-list-view">
                             <div id="backup-list-container" class="space-y-3">
                                 <div class="text-center text-gray-500 py-8">Loading backups...</div>
-                            </div>
-                        </div>
-                        
-                        <!-- People View -->
-                        <div id="backup-people-view" class="hidden">
-                            <div class="mb-4 flex justify-between items-center">
-                                <div class="text-sm text-gray-600" id="backup-people-count">0 people</div>
-                                <button id="backup-add-all-contacts-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 text-sm">
-                                    Add All to Contacts
-                                </button>
-                            </div>
-                            <div id="backup-people-container" class="space-y-2">
-                                <div class="text-center text-gray-500 py-8">Select a backup to view people</div>
                             </div>
                         </div>
                     </div>

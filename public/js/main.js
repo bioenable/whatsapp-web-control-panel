@@ -1875,24 +1875,45 @@ function renderParticipantsTable(data) {
 function downloadParticipantsCSV(data) {
     const { participants, groupName } = data;
     
-    // Create CSV content
-    const csvContent = [
-        ['Group Name', 'Phone Number', 'Role'],
-        ...participants.map(participant => {
-            let role = 'Member';
-            if (participant.isSuperAdmin) role = 'Super Admin';
-            else if (participant.isAdmin) role = 'Admin';
-            
-            return [
-                groupName,
-                participant.number,
-                role
-            ];
-        })
-    ].map(row => row.map(cell => `"${cell}"`).join(',')).join('\n');
+    // Google Contacts CSV format with generated names
+    // Headers: Name, Given Name, Family Name, Phone 1 - Type, Phone 1 - Value, Notes
+    const csvRows = [];
+    
+    // Add header row
+    csvRows.push(['Name', 'Given Name', 'Family Name', 'Phone 1 - Type', 'Phone 1 - Value', 'Notes'].map(field => `"${field}"`).join(','));
+    
+    // Add data rows with generated names
+    participants.forEach((participant, index) => {
+        let role = 'Member';
+        if (participant.isSuperAdmin) role = 'Super Admin';
+        else if (participant.isAdmin) role = 'Admin';
+        
+        // Generate name: "Member 1, ABC group" -> First Name: "Member 1", Last Name: "ABC group"
+        const firstName = `${role} ${index + 1}`;
+        const lastName = `${groupName}`;
+        const fullName = `${firstName}, ${lastName}`;
+        const phone = participant.number || '';
+        const phoneType = 'Mobile'; // Specify as Mobile type
+        const notes = `Role: ${role}`;
+        
+        csvRows.push([
+            fullName,
+            firstName,
+            lastName,
+            phoneType,
+            phone,
+            notes
+        ].map(cell => {
+            // Escape quotes and wrap in quotes
+            const escaped = String(cell || '').replace(/"/g, '""');
+            return `"${escaped}"`;
+        }).join(','));
+    });
+    
+    const csvContent = csvRows.join('\n');
     
     // Create and download file
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel compatibility
     const link = document.createElement('a');
     const url = URL.createObjectURL(blob);
     link.setAttribute('href', url);
@@ -1901,5 +1922,6 @@ function downloadParticipantsCSV(data) {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
 }
 

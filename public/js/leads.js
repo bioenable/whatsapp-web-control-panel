@@ -21,10 +21,16 @@
     const leadsTestBtn = document.getElementById('leads-test-btn');
     const leadsAddContactsBtn = document.getElementById('leads-add-contacts-btn');
     const leadsAddContactsAlerts = document.getElementById('leads-add-contacts-alerts');
+    const leadsDownloadCsvBtn = document.getElementById('leads-download-csv-btn');
     
     // Leads Tab State Variables
     let leadsData = [];
     let leadsFilteredData = [];
+    let currentPage = 1;
+    const leadsPerPage = 200;
+    let searchQuery = '';
+    let filterEnquirySource = '';
+    let filterDomain = '';
     let autoChatConfig = {
         enabled: false,
         systemPrompt: '',
@@ -61,11 +67,37 @@
 
         // Search and filter functionality
         if (leadsSearch) {
-            leadsSearch.addEventListener('input', filterLeads);
+            leadsSearch.addEventListener('input', (e) => {
+                searchQuery = e.target.value;
+                applyFiltersAndSearch();
+            });
         }
         
+        // Filter by Enquiry Source
+        const enquirySourceFilter = document.getElementById('leads-filter-enquiry-source');
+        if (enquirySourceFilter) {
+            enquirySourceFilter.addEventListener('change', (e) => {
+                filterEnquirySource = e.target.value;
+                applyFiltersAndSearch();
+            });
+        }
+        
+        // Filter by Domain
+        const domainFilter = document.getElementById('leads-filter-domain');
+        if (domainFilter) {
+            domainFilter.addEventListener('change', (e) => {
+                filterDomain = e.target.value;
+                applyFiltersAndSearch();
+            });
+        }
+        
+        // Keep old filter for Type if it exists
         if (leadsFilter) {
-            leadsFilter.addEventListener('change', filterLeads);
+            leadsFilter.addEventListener('change', (e) => {
+                // This can be kept for backward compatibility or removed
+                // For now, we'll keep it but it won't affect the new filtering
+                applyFiltersAndSearch();
+            });
         }
 
         // Refresh button
@@ -78,6 +110,11 @@
         // Add Contacts button
         if (leadsAddContactsBtn) {
             leadsAddContactsBtn.addEventListener('click', handleAddLeadsContacts);
+        }
+
+        // Download CSV button
+        if (leadsDownloadCsvBtn) {
+            leadsDownloadCsvBtn.addEventListener('click', downloadLeadsAsCSV);
         }
 
         // Auto chat toggle
@@ -212,9 +249,20 @@
                         }
                     });
                     
-                    leadsFilteredData = [...leadsData];
-                    renderLeadsList();
-                    updateLeadsCount();
+                    // Sort by created_on (latest first)
+                    leadsData.sort((a, b) => new Date(b.created_on) - new Date(a.created_on));
+                    
+                    // Limit to 2000 if exceeded
+                    if (leadsData.length > 2000) {
+                        leadsData = leadsData.slice(0, 2000);
+                        // Save back to server
+                        saveLeadsData(leadsData);
+                    }
+                    
+                    // Populate filter dropdowns with unique values
+                    populateFilterDropdowns();
+                    
+                    applyFiltersAndSearch();
                 })
                 .catch(err => {
                     console.error('Failed to load leads:', err);
@@ -359,17 +407,22 @@
                 const allLeads = Array.from(existingMobileMap.values())
                     .sort((a, b) => new Date(b.created_on) - new Date(a.created_on));
                 
-                // Keep only latest 200 records
-                const limitedLeads = allLeads.slice(0, 200);
+                // Keep only latest 2000 records (remove oldest if exceeded)
+                let limitedLeads = allLeads;
+                if (limitedLeads.length > 2000) {
+                    limitedLeads = allLeads.slice(0, 2000);
+                }
                 
                 // Save to server
                 saveLeadsData(limitedLeads);
                 
                 // Update local data
                 leadsData = limitedLeads;
-                leadsFilteredData = [...leadsData];
-                renderLeadsList();
-                updateLeadsCount();
+                
+                // Populate filter dropdowns with unique values
+                populateFilterDropdowns();
+                
+                applyFiltersAndSearch();
                 
                 // Show success message for new leads
                 if (newLeads.length > 0) {
@@ -381,7 +434,7 @@
                     const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000);
                     newLeads.forEach(lead => {
                         const leadDate = new Date(lead.created_on);
-                        if (leadDate > thirtyMinutesAgo && !lead.auto_chat_logs || lead.auto_chat_logs.length === 0) {
+                        if (leadDate > thirtyMinutesAgo && (!lead.auto_chat_logs || lead.auto_chat_logs.length === 0)) {
                             processAutoChat(lead);
                         }
                     });
@@ -391,12 +444,18 @@
                 // Still update the display with current data, ensuring no duplicates
                 const allLeads = Array.from(existingMobileMap.values())
                     .sort((a, b) => new Date(b.created_on) - new Date(a.created_on));
-                const limitedLeads = allLeads.slice(0, 200);
+                
+                let limitedLeads = allLeads;
+                if (limitedLeads.length > 2000) {
+                    limitedLeads = allLeads.slice(0, 2000);
+                }
                 
                 leadsData = limitedLeads;
-                leadsFilteredData = [...leadsData];
-                renderLeadsList();
-                updateLeadsCount();
+                
+                // Populate filter dropdowns with unique values
+                populateFilterDropdowns();
+                
+                applyFiltersAndSearch();
             }
         } catch (err) {
             console.error('Error processing leads:', err);
@@ -436,15 +495,18 @@
     function renderLeadsList() {
         if (!leadsList) return;
 
-        if (leadsFilteredData.length === 0) {
-            leadsList.innerHTML = '<tr><td colspan="8" class="text-center py-8 text-gray-500">No leads found</td></tr>';
-            return;
-        }
-
         // Render the leads list
         const leadsListContainer = document.getElementById('leads-list-container');
         if (!leadsListContainer) {
             console.error('Leads list container not found');
+            return;
+        }
+        
+        const paginatedLeads = getPaginatedLeads();
+        
+        if (paginatedLeads.length === 0) {
+            leadsListContainer.innerHTML = '<div class="text-center py-8 text-gray-500">No leads found matching your filters</div>';
+            updatePagination();
             return;
         }
         
@@ -455,6 +517,7 @@
                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Lead</th>
                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Mobile</th>
                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Inquiry</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Enquiry Source</th>
                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Source</th>
                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created</th>
                         <th class="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Auto Chat</th>
@@ -462,7 +525,7 @@
                     </tr>
                 </thead>
                 <tbody class="bg-white divide-y divide-gray-200">
-                    ${leadsFilteredData.map(lead => {
+                    ${paginatedLeads.map(lead => {
                         // Ensure contact_added is properly initialized
                         if (lead.contact_added === undefined) {
                             lead.contact_added = false;
@@ -491,6 +554,9 @@
                             contactTitle = 'Contact will be processed automatically';
                             contactOnClick = 'javascript:void(0)';
                         }
+                        
+                        const enquirySource = getEnquirySource(lead);
+                        
                         return `
                             <tr class="border-b hover:bg-gray-50">
                                 <td class="px-3 py-2">
@@ -537,6 +603,11 @@
                                     </div>
                                 </td>
                                 <td class="px-3 py-2">
+                                    <div class="text-xs text-gray-900 truncate max-w-xs" title="${escapeHtml(enquirySource)}">
+                                        ${escapeHtml(enquirySource || 'N/A')}
+                                    </div>
+                                </td>
+                                <td class="px-3 py-2">
                                     <a href="${escapeHtml(lead.source_url)}" target="_blank" class="text-blue-600 hover:text-blue-800 hover:underline text-xs truncate block" title="${escapeHtml(lead.source_url)}">
                                         ${getDomainFromUrl(lead.source_url)}
                                     </a>
@@ -569,7 +640,7 @@
                                 </td>
                             </tr>
                             <tr id="details-${lead.id}" class="hidden bg-gray-50">
-                                <td colspan="7" class="px-4 py-4">
+                                <td colspan="8" class="px-4 py-4">
                                     <div class="grid grid-cols-2 gap-4 text-sm">
                                         <div>
                                             <strong>Full Name:</strong> ${escapeHtml(lead.name)}<br>
@@ -596,11 +667,8 @@
             </table>
         `;
         
-        // Update leads count
-        const leadsCount = document.getElementById('leads-count');
-        if (leadsCount) {
-            leadsCount.textContent = `${leadsFilteredData.length} of ${leadsData.length} leads`;
-        }
+        updatePagination();
+        updateLeadsCount();
     }
 
     // Toggle individual auto chat for a lead
@@ -706,6 +774,63 @@
         }
     }
 
+    // Populate filter dropdowns with unique values
+    function populateFilterDropdowns() {
+        // Get unique Enquiry Sources
+        const enquirySources = new Set();
+        leadsData.forEach(lead => {
+            const enquirySource = getEnquirySource(lead);
+            if (enquirySource && enquirySource.trim()) {
+                enquirySources.add(enquirySource);
+            }
+        });
+        
+        // Populate Enquiry Source dropdown
+        const enquirySourceFilter = document.getElementById('leads-filter-enquiry-source');
+        if (enquirySourceFilter) {
+            const currentValue = enquirySourceFilter.value;
+            enquirySourceFilter.innerHTML = '<option value="">All Enquiry Sources</option>';
+            Array.from(enquirySources).sort().forEach(source => {
+                const option = document.createElement('option');
+                option.value = source;
+                option.textContent = source;
+                enquirySourceFilter.appendChild(option);
+            });
+            // Restore previous selection if it still exists
+            if (currentValue) {
+                enquirySourceFilter.value = currentValue;
+            }
+        }
+        
+        // Get unique Domains
+        const domains = new Set();
+        leadsData.forEach(lead => {
+            if (lead.source_url) {
+                const domain = getDomainFromUrl(lead.source_url);
+                if (domain && domain.trim()) {
+                    domains.add(domain);
+                }
+            }
+        });
+        
+        // Populate Domain dropdown
+        const domainFilter = document.getElementById('leads-filter-domain');
+        if (domainFilter) {
+            const currentValue = domainFilter.value;
+            domainFilter.innerHTML = '<option value="">All Domains</option>';
+            Array.from(domains).sort().forEach(domain => {
+                const option = document.createElement('option');
+                option.value = domain;
+                option.textContent = domain;
+                domainFilter.appendChild(option);
+            });
+            // Restore previous selection if it still exists
+            if (currentValue) {
+                domainFilter.value = currentValue;
+            }
+        }
+    }
+
     // Show status messages in the leads tab (instead of popups)
     function showLeadsStatus(message, type = 'info') {
         // Create or get status container
@@ -792,6 +917,153 @@
             return url;
         }
     }
+
+    // Extract Enquiry Source from additional_details
+    function getEnquirySource(lead) {
+        try {
+            if (!lead.additional_details) return '';
+            const details = typeof lead.additional_details === 'string' 
+                ? JSON.parse(lead.additional_details) 
+                : lead.additional_details;
+            return details['Enquiry Source'] || details['enquiry_source'] || '';
+        } catch (err) {
+            return '';
+        }
+    }
+
+    // Apply filters and search, then paginate
+    function applyFiltersAndSearch() {
+        let filtered = [...leadsData];
+        
+        // Apply text search across all fields
+        if (searchQuery.trim()) {
+            const query = searchQuery.toLowerCase();
+            filtered = filtered.filter(lead => {
+                const searchableText = [
+                    lead.name || '',
+                    lead.email || '',
+                    lead.mobile || '',
+                    lead.inquiry || '',
+                    lead.source_url || '',
+                    lead.Type || '',
+                    getEnquirySource(lead),
+                    JSON.stringify(lead.additional_details || {})
+                ].join(' ').toLowerCase();
+                return searchableText.includes(query);
+            });
+        }
+        
+        // Filter by Enquiry Source (exact match)
+        if (filterEnquirySource) {
+            filtered = filtered.filter(lead => {
+                const enquirySource = getEnquirySource(lead);
+                return enquirySource === filterEnquirySource;
+            });
+        }
+        
+        // Filter by Domain (exact match)
+        if (filterDomain) {
+            filtered = filtered.filter(lead => {
+                const domain = getDomainFromUrl(lead.source_url || '');
+                return domain === filterDomain;
+            });
+        }
+        
+        // Sort by created_on (latest first)
+        filtered.sort((a, b) => new Date(b.created_on) - new Date(a.created_on));
+        
+        leadsFilteredData = filtered;
+        currentPage = 1; // Reset to first page when filters change
+        renderLeadsList();
+        updateLeadsCount();
+    }
+
+    // Get paginated leads
+    function getPaginatedLeads() {
+        const startIndex = (currentPage - 1) * leadsPerPage;
+        const endIndex = startIndex + leadsPerPage;
+        return leadsFilteredData.slice(startIndex, endIndex);
+    }
+
+    // Update pagination controls
+    function updatePagination() {
+        const totalPages = Math.ceil(leadsFilteredData.length / leadsPerPage);
+        const paginationContainer = document.getElementById('leads-pagination');
+        
+        if (!paginationContainer) return;
+        
+        if (totalPages <= 1) {
+            paginationContainer.innerHTML = '';
+            return;
+        }
+        
+        let paginationHTML = '<div class="flex items-center justify-between mt-4">';
+        paginationHTML += `<div class="text-sm text-gray-700">Page ${currentPage} of ${totalPages} (${leadsFilteredData.length} total leads)</div>`;
+        paginationHTML += '<div class="flex space-x-2">';
+        
+        // Previous button
+        if (currentPage > 1) {
+            paginationHTML += `<button onclick="goToPage(${currentPage - 1})" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">Previous</button>`;
+        } else {
+            paginationHTML += `<button disabled class="px-3 py-1 bg-gray-100 text-gray-400 rounded cursor-not-allowed">Previous</button>`;
+        }
+        
+        // Page numbers
+        const maxVisiblePages = 5;
+        let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
+        let endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
+        
+        if (endPage - startPage < maxVisiblePages - 1) {
+            startPage = Math.max(1, endPage - maxVisiblePages + 1);
+        }
+        
+        if (startPage > 1) {
+            paginationHTML += `<button onclick="goToPage(1)" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">1</button>`;
+            if (startPage > 2) {
+                paginationHTML += `<span class="px-2">...</span>`;
+            }
+        }
+        
+        for (let i = startPage; i <= endPage; i++) {
+            if (i === currentPage) {
+                paginationHTML += `<button class="px-3 py-1 bg-blue-600 text-white rounded">${i}</button>`;
+            } else {
+                paginationHTML += `<button onclick="goToPage(${i})" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">${i}</button>`;
+            }
+        }
+        
+        if (endPage < totalPages) {
+            if (endPage < totalPages - 1) {
+                paginationHTML += `<span class="px-2">...</span>`;
+            }
+            paginationHTML += `<button onclick="goToPage(${totalPages})" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">${totalPages}</button>`;
+        }
+        
+        // Next button
+        if (currentPage < totalPages) {
+            paginationHTML += `<button onclick="goToPage(${currentPage + 1})" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300">Next</button>`;
+        } else {
+            paginationHTML += `<button disabled class="px-3 py-1 bg-gray-100 text-gray-400 rounded cursor-not-allowed">Next</button>`;
+        }
+        
+        paginationHTML += '</div></div>';
+        paginationContainer.innerHTML = paginationHTML;
+    }
+
+    // Go to specific page
+    window.goToPage = function(page) {
+        const totalPages = Math.ceil(leadsFilteredData.length / leadsPerPage);
+        if (page >= 1 && page <= totalPages) {
+            currentPage = page;
+            renderLeadsList();
+            updatePagination();
+            // Scroll to top of leads list
+            const leadsContainer = document.getElementById('leads-container');
+            if (leadsContainer) {
+                leadsContainer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+    };
 
     // Format date time
     function formatDateTime(dateString) {
@@ -1579,20 +1851,26 @@
             if (newLeads.length > 0) {
                 console.log(`Auto-fetch: Found ${newLeads.length} new/updated leads`);
                 
-                // Add new leads to the beginning
-                const updatedLeads = [...newLeads, ...existingLeads];
+                // Merge all leads (new + existing), sort by created_on (latest first)
+                const allLeads = [...newLeads, ...existingLeads]
+                    .sort((a, b) => new Date(b.created_on) - new Date(a.created_on));
                 
-                // Keep only latest 200 records
-                const limitedLeads = updatedLeads.slice(0, 200);
+                // Keep only latest 2000 records (remove oldest if exceeded)
+                let limitedLeads = allLeads;
+                if (limitedLeads.length > 2000) {
+                    limitedLeads = allLeads.slice(0, 2000);
+                }
                 
                 // Save to server silently
                 saveLeadsDataSilent(limitedLeads);
                 
                 // Update local data
                 leadsData = limitedLeads;
-                leadsFilteredData = [...leadsData];
-                renderLeadsList();
-                updateLeadsCount();
+                
+                // Populate filter dropdowns with unique values
+                populateFilterDropdowns();
+                
+                applyFiltersAndSearch();
                 
                 console.log(`Auto-fetch: Successfully processed and saved ${newLeads.length} new leads`);
             } else {
@@ -2403,6 +2681,91 @@
             case 'warning': return 'text-yellow-800';
             case 'info': return 'text-blue-800';
             default: return 'text-gray-800';
+        }
+    }
+
+    // Download leads as Google Contacts CSV
+    function downloadLeadsAsCSV() {
+        if (!leadsData || leadsData.length === 0) {
+            showLeadsStatus('No leads to download', 'warning');
+            return;
+        }
+
+        try {
+            // Google Contacts CSV format
+            // Headers: Name, Given Name, Family Name, Email 1 - Value, Phone 1 - Type, Phone 1 - Value, Notes
+            const csvRows = [];
+            
+            // Add header row
+            csvRows.push(['Name', 'Given Name', 'Family Name', 'Email 1 - Value', 'Phone 1 - Type', 'Phone 1 - Value', 'Notes'].map(field => `"${field}"`).join(','));
+            
+            // Add data rows
+            leadsData.forEach(lead => {
+                const name = lead.name || 'Unknown';
+                const nameParts = name.split(' ').filter(p => p.trim());
+                const givenName = nameParts.length > 0 ? nameParts[0] : name;
+                const familyName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+                const email = lead.email || '';
+                const phone = lead.mobile || '';
+                const phoneType = 'Mobile'; // Specify as Mobile type
+                
+                // Build notes with inquiry and additional_details
+                const notesParts = [];
+                if (lead.inquiry) {
+                    notesParts.push(`Inquiry: ${lead.inquiry}`);
+                }
+                if (lead.additional_details && typeof lead.additional_details === 'object') {
+                    try {
+                        const detailsJson = JSON.stringify(lead.additional_details);
+                        notesParts.push(`Additional Details: ${detailsJson}`);
+                    } catch (e) {
+                        // If additional_details is not valid JSON, add as string
+                        notesParts.push(`Additional Details: ${String(lead.additional_details)}`);
+                    }
+                } else if (lead.additional_details) {
+                    notesParts.push(`Additional Details: ${String(lead.additional_details)}`);
+                }
+                if (lead.source) {
+                    notesParts.push(`Source: ${lead.source}`);
+                }
+                if (lead.Type) {
+                    notesParts.push(`Type: ${lead.Type}`);
+                }
+                const notes = notesParts.join(' | ');
+                
+                csvRows.push([
+                    name,
+                    givenName,
+                    familyName,
+                    email,
+                    phoneType,
+                    phone,
+                    notes
+                ].map(cell => {
+                    // Escape quotes and wrap in quotes
+                    const escaped = String(cell || '').replace(/"/g, '""');
+                    return `"${escaped}"`;
+                }).join(','));
+            });
+            
+            const csvContent = csvRows.join('\n');
+            
+            // Create and download file
+            const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel compatibility
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(blob);
+            link.setAttribute('href', url);
+            link.setAttribute('download', `leads_contacts_${new Date().toISOString().split('T')[0]}.csv`);
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+            
+            showLeadsStatus(`Downloaded ${leadsData.length} leads as Google Contacts CSV`, 'success');
+        } catch (error) {
+            console.error('Error downloading leads CSV:', error);
+            showLeadsStatus('Failed to download CSV: ' + error.message, 'error');
         }
     }
 })(); 

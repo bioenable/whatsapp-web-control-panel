@@ -12,12 +12,7 @@ const backupChatSelect = document.getElementById('backup-chat-select');
 const backupChatId = document.getElementById('backup-chat-id');
 const backupAddForm = document.getElementById('backup-add-form');
 const backupListContainer = document.getElementById('backup-list-container');
-const backupListTab = document.getElementById('backup-list-tab');
-const backupPeopleTab = document.getElementById('backup-people-tab');
 const backupListView = document.getElementById('backup-list-view');
-const backupPeopleView = document.getElementById('backup-people-view');
-const backupPeopleContainer = document.getElementById('backup-people-container');
-const backupAddAllContactsBtn = document.getElementById('backup-add-all-contacts-btn');
 const backupMessagesModal = document.getElementById('backup-messages-modal');
 const backupMessagesContent = document.getElementById('backup-messages-content');
 const backupMessagesTitle = document.getElementById('backup-messages-title');
@@ -45,19 +40,6 @@ function initializeBackup() {
         backupAddForm.addEventListener('submit', handleAddBackup);
     }
     
-    // Setup tab switching
-    if (backupListTab) {
-        backupListTab.addEventListener('click', () => {
-            switchBackupTab('list');
-        });
-    }
-    
-    if (backupPeopleTab) {
-        backupPeopleTab.addEventListener('click', () => {
-            switchBackupTab('people');
-        });
-    }
-    
     // Setup modal close
     if (backupMessagesClose) {
         backupMessagesClose.addEventListener('click', () => {
@@ -82,11 +64,6 @@ function initializeBackup() {
                 loadBackupMessages(currentBackupChatId, currentBackupPage);
             }
         });
-    }
-    
-    // Setup add all contacts button
-    if (backupAddAllContactsBtn) {
-        backupAddAllContactsBtn.addEventListener('click', handleAddAllContacts);
     }
     
     // Load backup list when tab is clicked
@@ -405,6 +382,24 @@ async function loadBackupList() {
                             </button>
                         ` : ''}
                     </div>
+                    <div class="backup-people-section mt-4 hidden" data-chat-id="${backup.chatId}">
+                        <div class="border-t pt-3">
+                            <div class="mb-3 flex justify-between items-center">
+                                <div class="text-sm font-semibold text-gray-700">People in this backup</div>
+                                <div class="flex gap-2">
+                                    <button class="backup-download-csv-btn bg-green-600 text-white px-3 py-1 rounded text-sm hover:bg-green-700" data-chat-id="${backup.chatId}" data-chat-name="${escapeHtml(backup.chatName)}">
+                                        Download contacts CSV
+                                    </button>
+                                    <button class="backup-add-all-contacts-btn bg-blue-600 text-white px-3 py-1 rounded text-sm hover:bg-blue-700" data-chat-id="${backup.chatId}" data-chat-name="${escapeHtml(backup.chatName)}">
+                                        Try adding contacts
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="backup-people-container" data-chat-id="${backup.chatId}">
+                                <div class="text-center text-gray-500 py-4">Loading people...</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             `;
         }).join('');
@@ -423,6 +418,23 @@ async function loadBackupList() {
                 const chatId = e.target.dataset.chatId;
                 const chatName = e.target.dataset.chatName;
                 viewBackupPeople(chatId, chatName);
+            });
+        });
+        
+        // Add event listeners for people section buttons
+        document.querySelectorAll('.backup-add-all-contacts-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const chatId = e.target.dataset.chatId;
+                const chatName = e.target.dataset.chatName;
+                handleAddAllContacts(chatId, chatName, e.target);
+            });
+        });
+        
+        document.querySelectorAll('.backup-download-csv-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const chatId = e.target.dataset.chatId;
+                const chatName = e.target.dataset.chatName;
+                downloadBackupContactsCSV(chatId, chatName);
             });
         });
         
@@ -607,100 +619,80 @@ async function loadBackupMessages(chatId, page = 1) {
 async function viewBackupPeople(chatId, chatName) {
     currentBackupChatId = chatId;
     
-    // Switch to people tab
-    switchBackupTab('people');
+    // Find the people section for this backup
+    const peopleSection = document.querySelector(`.backup-people-section[data-chat-id="${chatId}"]`);
+    const peopleContainer = document.querySelector(`.backup-people-container[data-chat-id="${chatId}"]`);
+    const viewPeopleBtn = document.querySelector(`.view-backup-people-btn[data-chat-id="${chatId}"]`);
     
-    if (!backupPeopleContainer) return;
+    if (!peopleSection || !peopleContainer) return;
     
-    backupPeopleContainer.innerHTML = '<div class="text-center text-gray-500 py-8">Loading people...</div>';
+    // Toggle visibility
+    const isHidden = peopleSection.classList.contains('hidden');
+    if (isHidden) {
+        peopleSection.classList.remove('hidden');
+        if (viewPeopleBtn) {
+            viewPeopleBtn.textContent = 'Hide People';
+        }
+        peopleContainer.innerHTML = '<div class="text-center text-gray-500 py-4">Loading people...</div>';
+    } else {
+        peopleSection.classList.add('hidden');
+        if (viewPeopleBtn) {
+            viewPeopleBtn.textContent = 'View People';
+        }
+        return;
+    }
     
     try {
         const response = await fetch(`/api/backup/${encodeURIComponent(chatId)}/people`);
         const data = await response.json();
         
         if (!data.people || data.people.length === 0) {
-            backupPeopleContainer.innerHTML = '<div class="text-center text-gray-500 py-8">No people found in this backup</div>';
+            peopleContainer.innerHTML = '<div class="text-center text-gray-500 py-4">No people found in this backup</div>';
             return;
         }
         
-        // Update people count
-        const peopleCountEl = document.getElementById('backup-people-count');
-        if (peopleCountEl) {
-            peopleCountEl.textContent = `${data.people.length} people`;
-        }
-        
-        // Store chat name for add contacts
-        if (backupAddAllContactsBtn) {
-            backupAddAllContactsBtn.dataset.chatName = chatName;
-        }
-        
         // Render people list - compact one row per record
-        backupPeopleContainer.innerHTML = data.people.map(person => {
-            return `
-                <div class="px-3 py-2 bg-white border-b border-gray-200 flex items-center justify-between hover:bg-gray-50">
-                    <div class="flex-1 flex items-center gap-3">
-                        <div class="flex-1 min-w-0">
-                            <div class="text-sm font-medium text-gray-900 truncate">${escapeHtml(person.name || 'Unknown')}</div>
+        peopleContainer.innerHTML = `
+            <div class="max-h-96 overflow-y-auto border rounded">
+                ${data.people.map(person => {
+                    return `
+                        <div class="px-3 py-2 bg-white border-b border-gray-200 flex items-center justify-between hover:bg-gray-50">
+                            <div class="flex-1 flex items-center gap-3">
+                                <div class="flex-1 min-w-0">
+                                    <div class="text-sm font-medium text-gray-900 truncate">${escapeHtml(person.name || 'Unknown')}</div>
+                                </div>
+                                <div class="text-xs text-gray-500 font-mono">${escapeHtml(person.number)}</div>
+                                <div class="text-xs text-gray-400 w-16 text-right">${person.messageCount || 0} msgs</div>
+                            </div>
                         </div>
-                        <div class="text-xs text-gray-500 font-mono">${escapeHtml(person.number)}</div>
-                        <div class="text-xs text-gray-400 w-16 text-right">${person.messageCount || 0} msgs</div>
-                    </div>
-                </div>
-            `;
-        }).join('');
+                    `;
+                }).join('')}
+            </div>
+        `;
     } catch (error) {
         console.error('[BACKUP] Failed to load people:', error);
-        backupPeopleContainer.innerHTML = '<div class="text-center text-red-500 py-8">Failed to load people</div>';
-    }
-}
-
-// Switch between backup tabs
-function switchBackupTab(tab) {
-    if (tab === 'list') {
-        if (backupListTab) {
-            backupListTab.classList.add('border-green-600', 'font-semibold', 'text-green-700');
-            backupListTab.classList.remove('text-gray-600');
-        }
-        if (backupPeopleTab) {
-            backupPeopleTab.classList.remove('border-green-600', 'font-semibold', 'text-green-700');
-            backupPeopleTab.classList.add('text-gray-600');
-        }
-        if (backupListView) backupListView.classList.remove('hidden');
-        if (backupPeopleView) backupPeopleView.classList.add('hidden');
-    } else if (tab === 'people') {
-        if (backupPeopleTab) {
-            backupPeopleTab.classList.add('border-green-600', 'font-semibold', 'text-green-700');
-            backupPeopleTab.classList.remove('text-gray-600');
-        }
-        if (backupListTab) {
-            backupListTab.classList.remove('border-green-600', 'font-semibold', 'text-green-700');
-            backupListTab.classList.add('text-gray-600');
-        }
-        if (backupPeopleView) backupPeopleView.classList.remove('hidden');
-        if (backupListView) backupListView.classList.add('hidden');
+        peopleContainer.innerHTML = '<div class="text-center text-red-500 py-4">Failed to load people</div>';
     }
 }
 
 // Handle add all contacts
-async function handleAddAllContacts() {
-    if (!currentBackupChatId) {
+async function handleAddAllContacts(chatId, chatName, buttonElement) {
+    if (!chatId) {
         alert('Please select a backup first');
         return;
     }
     
-    const chatName = backupAddAllContactsBtn?.dataset.chatName || '';
-    
-    if (!confirm(`Add all people from "${chatName}" to contacts?`)) {
+    if (!confirm(`Try adding all people from "${chatName}" to contacts?`)) {
         return;
     }
     
-    if (backupAddAllContactsBtn) {
-        backupAddAllContactsBtn.disabled = true;
-        backupAddAllContactsBtn.textContent = 'Adding...';
+    if (buttonElement) {
+        buttonElement.disabled = true;
+        buttonElement.textContent = 'Adding...';
     }
     
     try {
-        const response = await fetch(`/api/backup/${encodeURIComponent(currentBackupChatId)}/add-contacts`, {
+        const response = await fetch(`/api/backup/${encodeURIComponent(chatId)}/add-contacts`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -721,10 +713,71 @@ async function handleAddAllContacts() {
         console.error('[BACKUP] Failed to add contacts:', error);
         alert('Failed to add contacts: ' + error.message);
     } finally {
-        if (backupAddAllContactsBtn) {
-            backupAddAllContactsBtn.disabled = false;
-            backupAddAllContactsBtn.textContent = 'Add All to Contacts';
+        if (buttonElement) {
+            buttonElement.disabled = false;
+            buttonElement.textContent = 'Try adding contacts';
         }
+    }
+}
+
+// Download backup contacts as Google Contacts CSV
+async function downloadBackupContactsCSV(chatId, chatName) {
+    try {
+        const response = await fetch(`/api/backup/${encodeURIComponent(chatId)}/people`);
+        const data = await response.json();
+        
+        if (!data.people || data.people.length === 0) {
+            alert('No people found in this backup');
+            return;
+        }
+        
+        // Google Contacts CSV format
+        // Simplified format with essential fields including Phone 1 - Type for Mobile
+        const csvRows = [];
+        
+        // Add header row
+        csvRows.push(['Name', 'Given Name', 'Family Name', 'Phone 1 - Type', 'Phone 1 - Value', 'Notes'].map(field => `"${field}"`).join(','));
+        
+        // Add data rows
+        data.people.forEach(person => {
+            const name = person.name || 'Unknown';
+            const nameParts = name.split(' ').filter(p => p.trim());
+            const givenName = nameParts.length > 0 ? nameParts[0] : name;
+            const familyName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : '';
+            const phone = person.number || '';
+            const phoneType = 'Mobile'; // Specify as Mobile type
+            const notes = `From backup: ${chatName}${person.messageCount ? ` (${person.messageCount} messages)` : ''}`;
+            
+            csvRows.push([
+                name,
+                givenName,
+                familyName,
+                phoneType,
+                phone,
+                notes
+            ].map(cell => {
+                // Escape quotes and wrap in quotes
+                const escaped = String(cell || '').replace(/"/g, '""');
+                return `"${escaped}"`;
+            }).join(','));
+        });
+        
+        const csvContent = csvRows.join('\n');
+        
+        // Create and download file
+        const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' }); // BOM for Excel compatibility
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', `${chatName.replace(/[^a-zA-Z0-9]/g, '_')}_contacts.csv`);
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    } catch (error) {
+        console.error('[BACKUP] Failed to download contacts CSV:', error);
+        alert('Failed to download contacts CSV: ' + error.message);
     }
 }
 

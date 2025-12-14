@@ -135,6 +135,8 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
         let existingBackup = null;
         let existingMessageIds = new Set();
         let peopleMap = new Map();
+        let lastBackupTimestamp = null;
+        let isFirstBackup = false;
         
         // Ensure backup directory exists
         if (!fs.existsSync(BACKUP_DIR)) {
@@ -146,7 +148,19 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                 existingBackup = readJson(backupFilePath, null);
                 if (existingBackup && existingBackup.messages) {
                     existingMessageIds = new Set(existingBackup.messages.map(m => m.id));
-                    addProgressLog(chatId, `Found existing backup with ${existingBackup.messages.length} messages`);
+                    // Get the timestamp of the most recent message (last backup point)
+                    if (existingBackup.messages.length > 0) {
+                        // Messages are sorted by timestamp, so last one is most recent
+                        const sortedMessages = [...existingBackup.messages].sort((a, b) => b.timestamp - a.timestamp);
+                        lastBackupTimestamp = sortedMessages[0].timestamp;
+                        addProgressLog(chatId, `Found existing backup with ${existingBackup.messages.length} messages. Last backup timestamp: ${new Date(lastBackupTimestamp * 1000).toLocaleString()}`);
+                    } else {
+                        isFirstBackup = true;
+                        addProgressLog(chatId, 'Found existing backup file but no messages, treating as first backup');
+                    }
+                } else {
+                    isFirstBackup = true;
+                    addProgressLog(chatId, 'Found existing backup file but no messages array, treating as first backup');
                 }
                 if (existingBackup && existingBackup.people) {
                     existingBackup.people.forEach(person => {
@@ -155,8 +169,10 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                 }
             } catch (err) {
                 addProgressLog(chatId, `Failed to read existing backup, creating new: ${err.message}`);
+                isFirstBackup = true;
             }
         } else {
+            isFirstBackup = true;
             // Create initial backup file immediately
             const initialBackup = {
                 chatId: chatId,
@@ -169,7 +185,7 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                 messages: []
             };
             writeJson(backupFilePath, initialBackup);
-            addProgressLog(chatId, 'Created new backup file');
+            addProgressLog(chatId, 'Created new backup file - first backup');
         }
         
         // Get messages - fetch and process incrementally
@@ -180,24 +196,41 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
         let batchNumber = 0;
         const maxFetchTime = BACKUP_TIMEOUT_MS; // Total 5 minutes
         const BATCH_TIMEOUT_MS = 60000; // 1 minute per batch
+        const FIRST_BACKUP_LIMIT = 500; // Limit for first-time backups
+        let hasReachedLastBackupPoint = false; // Track if we've reached messages from last backup
         
-        addProgressLog(chatId, `Starting to fetch messages (up to ${MAX_BACKUP_MESSAGES} messages in ${MAX_BACKUP_BATCHES} batches)...`);
+        if (isFirstBackup) {
+            addProgressLog(chatId, `First backup: Starting to fetch messages (up to ${FIRST_BACKUP_LIMIT} messages)...`);
+        } else {
+            addProgressLog(chatId, `Incremental backup: Fetching messages after ${new Date(lastBackupTimestamp * 1000).toLocaleString()}...`);
+        }
         
         while (hasMore && 
                (Date.now() - startTime) < maxFetchTime && 
                batchNumber < MAX_BACKUP_BATCHES && 
-               newMessagesCount < MAX_BACKUP_MESSAGES) {
+               (isFirstBackup ? newMessagesCount < FIRST_BACKUP_LIMIT : true)) {
             batchNumber++;
             const batchStartTime = Date.now();
-            addProgressLog(chatId, `Fetching batch ${batchNumber}/${MAX_BACKUP_BATCHES} (${BACKUP_BATCH_SIZE} messages, ${newMessagesCount}/${MAX_BACKUP_MESSAGES} so far)...`);
+            
+            if (isFirstBackup) {
+                addProgressLog(chatId, `Fetching batch ${batchNumber} (${BACKUP_BATCH_SIZE} messages, ${newMessagesCount}/${FIRST_BACKUP_LIMIT} so far)...`);
+            } else {
+                addProgressLog(chatId, `Fetching batch ${batchNumber} (${BACKUP_BATCH_SIZE} messages, ${newMessagesCount} new so far)...`);
+            }
             
             try {
-                // Fetch batch with timeout - no date restriction, fetch all available messages
-                // The library automatically loads older messages when limit is larger than currently loaded
-                // We'll request progressively more messages each batch to get older messages
-                // The library's loadEarlierMsgs will be called automatically
-                const requestedLimit = Math.min(BACKUP_BATCH_SIZE * batchNumber, MAX_BACKUP_MESSAGES);
-                const fetchOptions = { limit: requestedLimit };
+                // For incremental backups, fetch only recent messages
+                // For first backup, fetch from the beginning
+                let fetchOptions;
+                if (isFirstBackup) {
+                    // First backup: fetch progressively more messages
+                    const requestedLimit = Math.min(BACKUP_BATCH_SIZE * batchNumber, FIRST_BACKUP_LIMIT);
+                    fetchOptions = { limit: requestedLimit };
+                } else {
+                    // Incremental backup: fetch recent messages (newer than last backup)
+                    // Use a reasonable limit to get recent messages
+                    fetchOptions = { limit: BACKUP_BATCH_SIZE };
+                }
                 
                 const fetchPromise = chat.fetchMessages(fetchOptions);
                 const batchTimeoutPromise = new Promise((_, reject) => {
@@ -208,32 +241,75 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                 
                 if (messages.length === 0) {
                     hasMore = false;
-                    addProgressLog(chatId, 'No more messages to fetch');
+                    if (isFirstBackup) {
+                        addProgressLog(chatId, 'No messages found in chat');
+                    } else {
+                        addProgressLog(chatId, 'No new messages found since last backup');
+                    }
                     break;
                 }
                 
                 fetchedCount += messages.length;
                 
+                // For incremental backups, filter messages by timestamp
+                let candidateMessages = messages;
+                if (!isFirstBackup && lastBackupTimestamp) {
+                    // Only consider messages newer than last backup
+                    candidateMessages = messages.filter(m => m.timestamp > lastBackupTimestamp);
+                    if (candidateMessages.length === 0) {
+                        // All messages are older than last backup - we've reached the last backup point
+                        addProgressLog(chatId, 'All fetched messages are older than last backup. Backup is up to date.');
+                        hasReachedLastBackupPoint = true;
+                        hasMore = false;
+                        break;
+                    }
+                    
+                    // Check if we've reached messages from before last backup (meaning we've covered the gap)
+                    const oldestNewMessage = Math.min(...candidateMessages.map(m => m.timestamp));
+                    const newestOldMessage = Math.max(...messages.filter(m => m.timestamp <= lastBackupTimestamp).map(m => m.timestamp));
+                    
+                    // If we have messages older than last backup, we've gone too far back
+                    if (messages.some(m => m.timestamp <= lastBackupTimestamp)) {
+                        addProgressLog(chatId, 'Fetched messages include older messages than last backup. Stopping to avoid fetching past messages.');
+                        hasReachedLastBackupPoint = true;
+                        hasMore = false;
+                        // Still process the new messages we found
+                    }
+                }
+                
                 // Filter out messages we already have (from previous batches or existing backup)
-                const newMessages = messages.filter(m => !existingMessageIds.has(m.id._serialized));
+                const newMessages = candidateMessages.filter(m => !existingMessageIds.has(m.id._serialized));
+                
+                // For incremental backup: if this is the first batch and we got new messages covering the gap, we're done
+                if (!isFirstBackup && batchNumber === 1 && newMessages.length > 0) {
+                    const newestMessageTime = Math.max(...newMessages.map(m => m.timestamp));
+                    const currentTime = Math.floor(Date.now() / 1000);
+                    // If newest message is very recent (within last 5 minutes), likely we've covered the gap
+                    if (currentTime - newestMessageTime < 300) {
+                        addProgressLog(chatId, `Fetched ${newMessages.length} new messages up to current time. Backup is up to date.`);
+                        hasReachedLastBackupPoint = true;
+                        // Process these messages but don't fetch more
+                    }
+                }
                 
                 if (newMessages.length === 0 && existingMessageIds.size > 0) {
                     // All messages in this fetch are already backed up
-                    // But we might have more older messages, so check if we got the full requested amount
-                    if (messages.length < requestedLimit) {
-                        // Got fewer messages than requested - no more messages available
-                        addProgressLog(chatId, 'All available messages already backed up, no more messages to fetch');
+                    if (isFirstBackup) {
+                        // For first backup, if we got fewer messages than requested, we're done
+                        if (messages.length < fetchOptions.limit) {
+                            addProgressLog(chatId, 'All available messages already backed up, no more messages to fetch');
+                            hasMore = false;
+                            break;
+                        }
+                    } else {
+                        // For incremental backup, if no new messages, we're up to date
+                        addProgressLog(chatId, 'All fetched messages already backed up. Backup is up to date.');
                         hasMore = false;
                         break;
-                    } else {
-                        // Got full batch but all are duplicates - try requesting more to get older messages
-                        addProgressLog(chatId, `All ${messages.length} messages in this fetch already backed up, will try to fetch older messages in next batch...`);
-                        // Continue to next batch to try fetching older messages
                     }
                 }
                 
                 // If no new messages and we've already processed messages, we might have reached the end
-                // But continue if we haven't reached batch/message limits
                 if (newMessages.length === 0 && batchNumber === 1 && existingMessageIds.size === 0) {
                     // First batch and no messages - something wrong
                     addProgressLog(chatId, 'No messages found in chat');
@@ -241,103 +317,32 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                     break;
                 }
                 
-                // Check if we've reached the message limit
-                if (newMessagesCount + newMessages.length >= MAX_BACKUP_MESSAGES) {
+                // For first backup, check if we've reached the limit
+                if (isFirstBackup && newMessagesCount + newMessages.length >= FIRST_BACKUP_LIMIT) {
                     // Take only what we need to reach the limit
-                    const remaining = MAX_BACKUP_MESSAGES - newMessagesCount;
+                    const remaining = FIRST_BACKUP_LIMIT - newMessagesCount;
                     const limitedMessages = newMessages.slice(0, remaining);
-                    addProgressLog(chatId, `Reached message limit, processing ${limitedMessages.length} messages from batch ${batchNumber} (${remaining} remaining to reach ${MAX_BACKUP_MESSAGES})...`);
+                    addProgressLog(chatId, `Reached first backup limit, processing ${limitedMessages.length} messages from batch ${batchNumber} (${remaining} remaining to reach ${FIRST_BACKUP_LIMIT})...`);
                     
-                    // Process limited messages
-                    const processedBatch = [];
-                    for (const msg of limitedMessages) {
-                        const messageData = {
-                            id: msg.id._serialized,
-                            body: msg.body || (msg.hasMedia ? '(media)' : ''),
-                            timestamp: msg.timestamp,
-                            from: msg.from,
-                            fromMe: msg.fromMe,
-                            type: msg.type,
-                            hasMedia: msg.hasMedia,
-                            mediaType: msg.hasMedia ? (msg.type === 'image' ? 'image' : msg.type === 'video' ? 'video' : msg.type === 'document' ? 'document' : 'media') : null
-                        };
-                        
-                        // Get sender info for group/channel messages
-                        if (!msg.fromMe && (chat.isGroup || chat.isChannel)) {
-                            try {
-                                const contact = await msg.getContact();
-                                const senderName = contact.pushname || contact.name || contact.number || 'Unknown';
-                                const senderNumber = contact.number || msg.from.split('@')[0] || 'Unknown';
-                                
-                                messageData.senderName = senderName;
-                                messageData.senderNumber = senderNumber;
-                                
-                                // Track unique people
-                                if (!peopleMap.has(senderNumber)) {
-                                    peopleMap.set(senderNumber, {
-                                        number: senderNumber,
-                                        name: senderName,
-                                        firstSeen: msg.timestamp,
-                                        lastSeen: msg.timestamp,
-                                        messageCount: 1
-                                    });
-                                } else {
-                                    const person = peopleMap.get(senderNumber);
-                                    person.messageCount++;
-                                    if (msg.timestamp < person.firstSeen) person.firstSeen = msg.timestamp;
-                                    if (msg.timestamp > person.lastSeen) person.lastSeen = msg.timestamp;
-                                    if (senderName && senderName !== 'Unknown' && (!person.name || person.name === 'Unknown')) {
-                                        person.name = senderName;
-                                    }
-                                }
-                            } catch (err) {
-                                messageData.senderName = 'Unknown';
-                                messageData.senderNumber = msg.from.split('@')[0] || 'Unknown';
-                            }
-                        } else if (msg.fromMe) {
-                            messageData.senderName = 'You';
-                            messageData.senderNumber = 'me';
-                        }
-                        
-                        processedBatch.push(messageData);
-                        existingMessageIds.add(msg.id._serialized);
-                    }
-                    
-                    // Save the limited batch
-                    if (processedBatch.length > 0) {
-                        const currentBackup = readJson(backupFilePath, {
-                            chatId: chatId,
-                            chatName: chatName,
-                            chatType: chatType,
-                            createdAt: new Date().toISOString(),
-                            lastUpdated: new Date().toISOString(),
-                            messageCount: 0,
-                            people: [],
-                            messages: []
-                        });
-                        
-                        currentBackup.messages = currentBackup.messages.concat(processedBatch);
-                        currentBackup.messages.sort((a, b) => a.timestamp - b.timestamp);
-                        currentBackup.people = Array.from(peopleMap.values());
-                        currentBackup.lastUpdated = new Date().toISOString();
-                        currentBackup.messageCount = currentBackup.messages.length;
-                        
-                        writeJson(backupFilePath, currentBackup);
-                        newMessagesCount += processedBatch.length;
-                        
-                        addProgressLog(chatId, `Saved ${processedBatch.length} messages to backup file (Total: ${currentBackup.messageCount}, Limit reached: ${MAX_BACKUP_MESSAGES})`);
-                    }
-                    
-                    hasMore = false;
-                    break;
+                    // Process limited messages (code continues below)
+                    // We'll handle this in the processing section
                 }
                 
-                addProgressLog(chatId, `Processing ${newMessages.length} new messages from batch ${batchNumber}...`);
+                // Determine which messages to process
+                let messagesToProcess = newMessages;
+                if (isFirstBackup && newMessagesCount + newMessages.length >= FIRST_BACKUP_LIMIT) {
+                    // Take only what we need to reach the limit
+                    const remaining = FIRST_BACKUP_LIMIT - newMessagesCount;
+                    messagesToProcess = newMessages.slice(0, remaining);
+                    addProgressLog(chatId, `Reached first backup limit, processing ${messagesToProcess.length} messages from batch ${batchNumber} (${remaining} remaining to reach ${FIRST_BACKUP_LIMIT})...`);
+                } else {
+                    addProgressLog(chatId, `Processing ${messagesToProcess.length} new messages from batch ${batchNumber}...`);
+                }
                 
                 // Process messages incrementally and write to file
                 const processedBatch = [];
                 
-                for (const msg of newMessages) {
+                for (const msg of messagesToProcess) {
                 const messageData = {
                     id: msg.id._serialized,
                     body: msg.body || (msg.hasMedia ? '(media)' : ''),
@@ -419,8 +424,19 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                 writeJson(backupFilePath, currentBackup);
                 newMessagesCount += processedBatch.length;
                 
-                    addProgressLog(chatId, `Saved ${processedBatch.length} messages to backup file (Total: ${currentBackup.messageCount})`);
+                addProgressLog(chatId, `Saved ${processedBatch.length} messages to backup file (Total: ${currentBackup.messageCount})`);
+                
+                // For first backup, stop if we've reached the limit
+                if (isFirstBackup && newMessagesCount >= FIRST_BACKUP_LIMIT) {
+                    hasMore = false;
+                    break;
                 }
+            } else {
+                // No new messages to process
+                if (!isFirstBackup) {
+                    addProgressLog(chatId, 'No new messages to process in this batch');
+                }
+            }
                 
                 // Track the oldest message ID for potential future pagination
                 // Sort messages by timestamp to get the oldest
@@ -430,13 +446,26 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                 }
                 
                 // Continue if we got messages and haven't reached limits
-                // Don't stop just because batch is smaller than batch size - continue to try more batches
-                hasMore = messages.length > 0 && 
-                         batchNumber < MAX_BACKUP_BATCHES && 
-                         newMessagesCount < MAX_BACKUP_MESSAGES;
+                // For incremental backups, stop if we've reached the last backup point
+                if (hasReachedLastBackupPoint) {
+                    hasMore = false;
+                } else if (isFirstBackup) {
+                    hasMore = messages.length > 0 && 
+                             batchNumber < MAX_BACKUP_BATCHES && 
+                             newMessagesCount < FIRST_BACKUP_LIMIT;
+                } else {
+                    // Incremental backup: stop if no new messages or we've covered the gap
+                    hasMore = messages.length > 0 && 
+                             batchNumber < MAX_BACKUP_BATCHES &&
+                             newMessages.length > 0;
+                }
                 
                 const batchDuration = Date.now() - batchStartTime;
-                addProgressLog(chatId, `Batch ${batchNumber}/${MAX_BACKUP_BATCHES} completed in ${Math.round(batchDuration/1000)}s. Total fetched: ${fetchedCount}, New: ${newMessagesCount}/${MAX_BACKUP_MESSAGES}`);
+                if (isFirstBackup) {
+                    addProgressLog(chatId, `Batch ${batchNumber} completed in ${Math.round(batchDuration/1000)}s. Total fetched: ${fetchedCount}, New: ${newMessagesCount}/${FIRST_BACKUP_LIMIT}`);
+                } else {
+                    addProgressLog(chatId, `Batch ${batchNumber} completed in ${Math.round(batchDuration/1000)}s. Total fetched: ${fetchedCount}, New: ${newMessagesCount}`);
+                }
                 
                 // Check if we've reached batch limit
                 if (batchNumber >= MAX_BACKUP_BATCHES) {
@@ -444,9 +473,9 @@ async function performBackup(client, chatId, chatName, chatType, BACKUP_DIR, BAC
                     hasMore = false;
                 }
                 
-                // Check if we've reached message limit
-                if (newMessagesCount >= MAX_BACKUP_MESSAGES) {
-                    addProgressLog(chatId, `Reached message limit (${MAX_BACKUP_MESSAGES} messages), stopping...`);
+                // Check if we've reached message limit (for first backup)
+                if (isFirstBackup && newMessagesCount >= FIRST_BACKUP_LIMIT) {
+                    addProgressLog(chatId, `Reached first backup limit (${FIRST_BACKUP_LIMIT} messages), stopping...`);
                     hasMore = false;
                 }
                 
@@ -538,6 +567,7 @@ function setupBackupRoutes(app, client, getReady, BACKUP_DIR, BACKUP_LIST_FILE, 
     // Get backup list
     app.get('/api/backup/list', (req, res) => {
         try {
+            // Use the BACKUP_LIST_FILE passed to this function (which should be account-specific)
             const backupList = readJson(BACKUP_LIST_FILE, { backups: [] });
             res.json(backupList);
         } catch (err) {

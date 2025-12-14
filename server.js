@@ -8,6 +8,162 @@ const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const CloudflareClient = require('./cloudflare-client.js');
+// Account-specific path management
+const PRIVATE_DATA_DIR = path.join(__dirname, 'private-data');
+let currentAccountNumber = null;
+let accountPaths = null;
+
+// Function to get account-specific paths
+function getAccountPaths(phoneNumber) {
+    if (!phoneNumber) {
+        throw new Error('Phone number is required to get account paths');
+    }
+    
+    // Sanitize phone number for folder name (remove special characters)
+    const sanitizedNumber = phoneNumber.replace(/[^0-9]/g, '');
+    const accountDir = path.join(PRIVATE_DATA_DIR, sanitizedNumber);
+    const backupsDir = path.join(accountDir, 'backups');
+    const logsDir = path.join(accountDir, 'logs');
+    
+    return {
+        accountDir,
+        backupsDir,
+        logsDir,
+        templatesFile: path.join(accountDir, 'templates.json'),
+        bulkFile: path.join(accountDir, 'bulk_messages.json'),
+        sentMessagesFile: path.join(accountDir, 'sent_messages.json'),
+        detectedChannelsFile: path.join(accountDir, 'detected_channels.json'),
+        leadsFile: path.join(accountDir, 'leads.json'),
+        leadsConfigFile: path.join(accountDir, 'leads-config.json'),
+        cloudflareLogsFile: path.join(logsDir, 'cloudflare_logs.json'),
+        cloudflareMessagesFile: path.join(logsDir, 'cloudflare_messages.json'),
+        backupListFile: path.join(accountDir, 'backup_list.json'),
+        automationsFile: path.join(accountDir, 'automations.json')
+    };
+}
+
+// Function to initialize account directories and migrate files if needed
+function initializeAccountPaths(phoneNumber) {
+    if (!phoneNumber) {
+        console.error('[ACCOUNT] Cannot initialize paths: phone number not provided');
+        return false;
+    }
+    
+    const paths = getAccountPaths(phoneNumber);
+    currentAccountNumber = phoneNumber;
+    accountPaths = paths;
+    
+    // Create directories
+    try {
+        if (!fs.existsSync(PRIVATE_DATA_DIR)) {
+            fs.mkdirSync(PRIVATE_DATA_DIR, { recursive: true });
+            console.log(`[ACCOUNT] Created private-data directory`);
+        }
+        
+        if (!fs.existsSync(paths.accountDir)) {
+            fs.mkdirSync(paths.accountDir, { recursive: true });
+            console.log(`[ACCOUNT] Created account directory: ${paths.accountDir}`);
+        }
+        
+        if (!fs.existsSync(paths.backupsDir)) {
+            fs.mkdirSync(paths.backupsDir, { recursive: true });
+            console.log(`[ACCOUNT] Created backups directory: ${paths.backupsDir}`);
+        }
+        
+        if (!fs.existsSync(paths.logsDir)) {
+            fs.mkdirSync(paths.logsDir, { recursive: true });
+            console.log(`[ACCOUNT] Created logs directory: ${paths.logsDir}`);
+        }
+        
+        // Migrate existing files from root directory if this is the first account
+        migrateLegacyFiles(phoneNumber, paths);
+        
+        return true;
+    } catch (error) {
+        console.error(`[ACCOUNT] Error initializing account paths:`, error);
+        return false;
+    }
+}
+
+// Function to migrate legacy files from root to account-specific directory
+function migrateLegacyFiles(phoneNumber, accountPaths) {
+    const legacyFiles = [
+        { old: path.join(__dirname, 'templates.json'), new: accountPaths.templatesFile },
+        { old: path.join(__dirname, 'bulk_messages.json'), new: accountPaths.bulkFile },
+        { old: path.join(__dirname, 'sent_messages.json'), new: accountPaths.sentMessagesFile },
+        { old: path.join(__dirname, 'detected_channels.json'), new: accountPaths.detectedChannelsFile },
+        { old: path.join(__dirname, 'leads.json'), new: accountPaths.leadsFile },
+        { old: path.join(__dirname, 'leads-config.json'), new: accountPaths.leadsConfigFile },
+        { old: path.join(__dirname, 'backup_list.json'), new: accountPaths.backupListFile },
+        { old: path.join(__dirname, 'automations.json'), new: accountPaths.automationsFile }
+    ];
+    
+    // Migrate backup files
+    const legacyBackupDir = path.join(__dirname, 'backups');
+    if (fs.existsSync(legacyBackupDir)) {
+        try {
+            const backupFiles = fs.readdirSync(legacyBackupDir).filter(f => f.endsWith('.json'));
+            backupFiles.forEach(file => {
+                const oldPath = path.join(legacyBackupDir, file);
+                const newPath = path.join(accountPaths.backupsDir, file);
+                if (!fs.existsSync(newPath)) {
+                    fs.copyFileSync(oldPath, newPath);
+                    console.log(`[ACCOUNT] Migrated backup file: ${file}`);
+                }
+            });
+        } catch (error) {
+            console.error(`[ACCOUNT] Error migrating backup files:`, error);
+        }
+    }
+    
+    // Migrate automation log files
+    try {
+        const rootFiles = fs.readdirSync(__dirname).filter(f => 
+            f.startsWith('automation_log_') && f.endsWith('.json')
+        );
+        rootFiles.forEach(file => {
+            const oldPath = path.join(__dirname, file);
+            const newPath = path.join(accountPaths.logsDir, file);
+            if (!fs.existsSync(newPath)) {
+                fs.copyFileSync(oldPath, newPath);
+                console.log(`[ACCOUNT] Migrated log file: ${file}`);
+            }
+        });
+    } catch (error) {
+        console.error(`[ACCOUNT] Error migrating log files:`, error);
+    }
+    
+    // Migrate cloudflare log files
+    const legacyCloudflareFiles = [
+        { old: path.join(__dirname, 'cloudflare_logs.json'), new: accountPaths.cloudflareLogsFile },
+        { old: path.join(__dirname, 'cloudflare_messages.json'), new: accountPaths.cloudflareMessagesFile }
+    ];
+    
+    legacyCloudflareFiles.forEach(({ old, new: newPath }) => {
+        if (fs.existsSync(old) && !fs.existsSync(newPath)) {
+            try {
+                fs.copyFileSync(old, newPath);
+                console.log(`[ACCOUNT] Migrated file: ${path.basename(old)}`);
+            } catch (error) {
+                console.error(`[ACCOUNT] Error migrating ${path.basename(old)}:`, error);
+            }
+        }
+    });
+    
+    // Migrate other JSON files
+    legacyFiles.forEach(({ old, new: newPath }) => {
+        if (fs.existsSync(old) && !fs.existsSync(newPath)) {
+            try {
+                fs.copyFileSync(old, newPath);
+                console.log(`[ACCOUNT] Migrated file: ${path.basename(old)}`);
+            } catch (error) {
+                console.error(`[ACCOUNT] Error migrating ${path.basename(old)}:`, error);
+            }
+        }
+    });
+}
+
+// Legacy file paths (for backward compatibility during migration)
 const TEMPLATES_FILE = path.join(__dirname, 'templates.json');
 const BULK_FILE = path.join(__dirname, 'bulk_messages.json');
 const SENT_MESSAGES_FILE = path.join(__dirname, 'sent_messages.json');
@@ -66,9 +222,14 @@ const CLOUDFLARE_LOG_MAX_ENTRIES = 5000;
 
 // Append Cloudflare sync log entry
 function appendCloudflareLog(entry) {
+    if (!accountPaths) {
+        console.error('[CLOUDFLARE-LOG] Cannot append log: account paths not initialized');
+        return;
+    }
+    
     try {
         let logs = [];
-        let currentLogFile = CLOUDFLARE_LOGS_FILE;
+        let currentLogFile = accountPaths.cloudflareLogsFile;
         let fileIndex = 0;
 
         // Find the current log file (handle rotation)
@@ -78,8 +239,8 @@ function appendCloudflareLog(entry) {
                 break;
             }
             fileIndex++;
-            const baseName = CLOUDFLARE_LOGS_FILE.replace('.json', '');
-            currentLogFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
+            const baseName = accountPaths.cloudflareLogsFile.replace('.json', '');
+            currentLogFile = path.join(accountPaths.logsDir, `${path.basename(baseName)}_${fileIndex}.json`);
         }
 
         // Read existing logs from the current file
@@ -125,9 +286,14 @@ function appendCloudflareLog(entry) {
 
 // Append Cloudflare message entry
 function appendCloudflareMessage(entry) {
+    if (!accountPaths) {
+        console.error('[CLOUDFLARE-MESSAGE] Cannot append message: account paths not initialized');
+        return;
+    }
+    
     try {
         let messages = [];
-        let currentMessageFile = CLOUDFLARE_MESSAGES_FILE;
+        let currentMessageFile = accountPaths.cloudflareMessagesFile;
         let fileIndex = 0;
 
         // Find the current message file (handle rotation)
@@ -137,8 +303,8 @@ function appendCloudflareMessage(entry) {
                 break;
             }
             fileIndex++;
-            const baseName = CLOUDFLARE_MESSAGES_FILE.replace('.json', '');
-            currentMessageFile = path.join(__dirname, `${path.basename(baseName)}_${fileIndex}.json`);
+            const baseName = accountPaths.cloudflareMessagesFile.replace('.json', '');
+            currentMessageFile = path.join(accountPaths.logsDir, `${path.basename(baseName)}_${fileIndex}.json`);
         }
 
         // Read existing messages from the current file
@@ -854,37 +1020,42 @@ async function processQueuedMessages() {
   }
 }
 
-// Initialize required JSON files with proper structure
+// Initialize required JSON files with proper structure (account-specific)
 function initializeJsonFiles() {
+    if (!accountPaths) {
+        console.log('[INIT] Skipping JSON file initialization: account paths not initialized yet');
+        return;
+    }
+    
     console.log('[INIT] Checking and initializing required JSON files...');
     
     const filesToInitialize = [
         {
-            path: TEMPLATES_FILE,
+            path: accountPaths.templatesFile,
             defaultContent: []
         },
         {
-            path: BULK_FILE,
+            path: accountPaths.bulkFile,
             defaultContent: []
         },
         {
-            path: SENT_MESSAGES_FILE,
+            path: accountPaths.sentMessagesFile,
             defaultContent: []
         },
         {
-            path: AUTOMATIONS_FILE,
+            path: accountPaths.automationsFile,
             defaultContent: []
         },
         {
-            path: DETECTED_CHANNELS_FILE,
+            path: accountPaths.detectedChannelsFile,
             defaultContent: []
         },
         {
-            path: LEADS_FILE,
+            path: accountPaths.leadsFile,
             defaultContent: { leads: [] }
         },
         {
-            path: LEADS_CONFIG_FILE,
+            path: accountPaths.leadsConfigFile,
             defaultContent: {
                 enabled: false,
                 systemPrompt: '',
@@ -894,18 +1065,27 @@ function initializeJsonFiles() {
             }
         },
         {
-            path: CLOUDFLARE_LOGS_FILE,
+            path: accountPaths.cloudflareLogsFile,
             defaultContent: []
         },
         {
-            path: CLOUDFLARE_MESSAGES_FILE,
+            path: accountPaths.cloudflareMessagesFile,
             defaultContent: []
+        },
+        {
+            path: accountPaths.backupListFile,
+            defaultContent: { backups: [] }
         }
     ];
     
     filesToInitialize.forEach(file => {
         try {
             if (!fs.existsSync(file.path)) {
+                // Ensure directory exists
+                const dir = path.dirname(file.path);
+                if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true });
+                }
                 fs.writeFileSync(file.path, JSON.stringify(file.defaultContent, null, 2));
                 console.log(`[INIT] Created: ${path.basename(file.path)}`);
             } else {
@@ -918,9 +1098,6 @@ function initializeJsonFiles() {
     
     console.log('[INIT] JSON files initialization completed');
 }
-
-// Initialize JSON files on startup
-initializeJsonFiles();
 const genAI = new GoogleGenAI({});
 const groundingTool = { googleSearch: {} };
 const genAIConfig = { tools: [groundingTool], maxOutputTokens: 512 };
@@ -1069,14 +1246,19 @@ async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessa
   }
 }
 function appendAutomationLog(automation, entry) {
+  if (!accountPaths) {
+    console.error('[AUTOMATION] Cannot append log: account paths not initialized');
+    return;
+  }
+  
   try {
     // Ensure entry has timestamp
     if (!entry.timestamp) {
       entry.timestamp = new Date().toISOString();
     }
     
-    // Get current log file path
-    let logPath = path.join(__dirname, automation.logFile);
+    // Get current log file path (in logs directory)
+    let logPath = path.join(accountPaths.logsDir, automation.logFile);
     let logFileIndex = 0;
     
     // Check if current log file exists and is too large (10MB limit)
@@ -1091,7 +1273,7 @@ function appendAutomationLog(automation, entry) {
         let nextLogPath;
         
         do {
-          nextLogPath = path.join(__dirname, `${baseName}_${nextIndex}.json`);
+          nextLogPath = path.join(accountPaths.logsDir, `${baseName}_${nextIndex}.json`);
           nextIndex++;
         } while (fs.existsSync(nextLogPath) && nextIndex < 1000); // Safety limit
         
@@ -1163,11 +1345,19 @@ function appendAutomationLog(automation, entry) {
   }
 }
 function readAutomations() {
-  if (!fs.existsSync(AUTOMATIONS_FILE)) return [];
-  return JSON.parse(fs.readFileSync(AUTOMATIONS_FILE, 'utf8'));
+  if (!accountPaths) {
+    console.error('[AUTOMATIONS] Cannot read automations: account paths not initialized');
+    return [];
+  }
+  if (!fs.existsSync(accountPaths.automationsFile)) return [];
+  return JSON.parse(fs.readFileSync(accountPaths.automationsFile, 'utf8'));
 }
 function writeAutomations(data) {
-  fs.writeFileSync(AUTOMATIONS_FILE, JSON.stringify(data, null, 2));
+  if (!accountPaths) {
+    console.error('[AUTOMATIONS] Cannot write automations: account paths not initialized');
+    return;
+  }
+  fs.writeFileSync(accountPaths.automationsFile, JSON.stringify(data, null, 2));
 }
 
 function readJson(file, fallback = []) {
@@ -1238,16 +1428,19 @@ function checkDiskSpace() {
 
 // Clean up old log files to free disk space
 function cleanupOldLogs() {
+    if (!accountPaths) return; // Skip if account not initialized
+    
     try {
-        const files = fs.readdirSync(__dirname);
+        const logDir = accountPaths.logsDir;
+        const files = fs.readdirSync(logDir);
         const logFiles = files.filter(file => 
             file.startsWith('automation_log_') && file.endsWith('.json')
         );
         
         // Sort by modification time (oldest first)
         logFiles.sort((a, b) => {
-            const statA = fs.statSync(path.join(__dirname, a));
-            const statB = fs.statSync(path.join(__dirname, b));
+            const statA = fs.statSync(path.join(logDir, a));
+            const statB = fs.statSync(path.join(logDir, b));
             return statA.mtime.getTime() - statB.mtime.getTime();
         });
         
@@ -1256,7 +1449,7 @@ function cleanupOldLogs() {
         
         filesToDelete.forEach(file => {
             try {
-                fs.unlinkSync(path.join(__dirname, file));
+                fs.unlinkSync(path.join(logDir, file));
                 console.log(`[CLEANUP] Deleted old log file: ${file}`);
             } catch (error) {
                 console.error(`[ERROR] Failed to delete ${file}:`, error.message);
@@ -1483,6 +1676,19 @@ client.on('ready', async () => {
         const userName = currentUserInfo.pushname || 'Unknown User';
         console.log(`[USER] Logged in as: ${userName} (${phoneNumber})`);
         console.log(`[USER] User ID: ${userInfo.id}`);
+        
+        // Initialize account-specific paths
+        console.log(`[ACCOUNT] Initializing paths for account: ${phoneNumber}`);
+        if (initializeAccountPaths(phoneNumber)) {
+            console.log(`[ACCOUNT] Account paths initialized successfully`);
+            // Initialize JSON files for this account
+            initializeJsonFiles();
+            // Setup backup routes for this account (this will use account-specific paths)
+            backupRoutesSetup = false; // Reset to allow re-setup
+            setupBackupRoutesForAccount();
+        } else {
+            console.error(`[ACCOUNT] Failed to initialize account paths`);
+        }
     } else {
         console.log('[USER] Warning: Could not detect user information');
     }
@@ -1653,7 +1859,7 @@ async function handleLeadsAutoReply(msg) {
         const mobileNumber = chatId.replace('@c.us', '');
         
         // Load leads data
-        const leadsData = readJson(LEADS_FILE, { leads: [] });
+        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
         if (!leadsData.leads || !Array.isArray(leadsData.leads)) return;
         
         // Find lead with auto chat enabled for this mobile number
@@ -1677,7 +1883,7 @@ async function handleLeadsAutoReply(msg) {
         console.log(`[LEADS AUTO-REPLY] Processing auto-reply for lead: ${lead.name} (${lead.mobile})`);
         
         // Load leads auto chat configuration
-        const config = readJson(LEADS_CONFIG_FILE, {
+        const config = readJson(accountPaths ? accountPaths.leadsConfigFile : LEADS_CONFIG_FILE, {
             enabled: false,
             systemPrompt: '',
             includeJsonContext: true,
@@ -1752,7 +1958,7 @@ async function handleLeadsAutoReply(msg) {
 // Log message to lead's auto chat logs
 async function logLeadAutoChatMessage(leadId, type, message, prompt = '') {
     try {
-        const leadsData = readJson(LEADS_FILE, { leads: [] });
+        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
         if (!leadsData.leads || !Array.isArray(leadsData.leads)) return;
         
         const leadIndex = leadsData.leads.findIndex(l => l.id === leadId);
@@ -1778,7 +1984,7 @@ async function logLeadAutoChatMessage(leadId, type, message, prompt = '') {
         leadsData.leads[leadIndex].last_updated = new Date().toISOString();
         
         // Save back to file
-        writeJson(LEADS_FILE, leadsData);
+        writeJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, leadsData);
         
         console.log(`[LEADS AUTO-REPLY] Logged ${type} message for lead: ${leadIndex}`);
         
@@ -1849,7 +2055,7 @@ setInterval(() => {
 const BULK_SEND_DELAY_SEC = 1; // default delay between messages
 setInterval(async () => {
     if (!ready) return;
-    let records = readJson(BULK_FILE);
+    let records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
     let changed = false;
     const now = new Date();
     for (let i = 0; i < records.length; i++) {
@@ -1884,7 +2090,7 @@ setInterval(async () => {
                     records[i].sent_datetime = new Date().toISOString();
                     records[i].error = `Failed to verify group access: ${groupErr.message}`;
                     changed = true;
-                    writeJson(BULK_FILE, records);
+                    writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
                     continue; // Skip to next message
                 }
             } else {
@@ -1983,7 +2189,7 @@ setInterval(async () => {
                     records[i].sent_datetime = new Date().toISOString();
                     records[i].error = `Failed to add number to contacts before sending bulk message: ${addErr.message}`;
                     changed = true;
-                    writeJson(BULK_FILE, records);
+                    writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
                     continue; // Skip to next message
                 }
                 }
@@ -2029,7 +2235,7 @@ setInterval(async () => {
             records[i].status = 'sent';
             records[i].sent_datetime = new Date().toISOString();
             changed = true;
-            writeJson(BULK_FILE, records);
+            writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
             await new Promise(res => setTimeout(res, BULK_SEND_DELAY_SEC * 1000));
         } catch (err) {
             console.error(`Bulk send error for ${r.number}:`, err.message);
@@ -2040,10 +2246,10 @@ setInterval(async () => {
             records[i].sent_datetime = new Date().toISOString();
             records[i].error = err.message; // Store error message for debugging
             changed = true;
-            writeJson(BULK_FILE, records);
+            writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
         }
     }
-    if (changed) writeJson(BULK_FILE, records);
+    if (changed) writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
 }, 30000);
 
 // --- Automation Scheduler ---
@@ -2229,8 +2435,13 @@ setInterval(async () => {
 
 // Utility to append to sent messages log
 function appendSentMessageLog(entry) {
+    if (!accountPaths) {
+        console.error('[SENT-MESSAGES] Cannot append log: account paths not initialized');
+        return;
+    }
+    
     try {
-        const logs = readJson(SENT_MESSAGES_FILE);
+        const logs = readJson(accountPaths.sentMessagesFile);
         logs.unshift({ ...entry, time: new Date().toISOString() });
         
         // Keep only last 1000 sent messages to prevent disk space issues
@@ -2238,7 +2449,7 @@ function appendSentMessageLog(entry) {
             logs.splice(1000);
         }
         
-        const writeSuccess = writeJson(SENT_MESSAGES_FILE, logs);
+        const writeSuccess = writeJson(accountPaths ? accountPaths.sentMessagesFile : SENT_MESSAGES_FILE, logs);
         if (!writeSuccess) {
             console.log(`[SENT] Failed to save sent message log due to disk space`);
         }
@@ -2251,7 +2462,7 @@ function appendSentMessageLog(entry) {
 // Utility to manage detected channels
 function addDetectedChannel(channelId, channelInfo = {}) {
     try {
-        let channels = readJson(DETECTED_CHANNELS_FILE);
+        let channels = readJson(accountPaths ? accountPaths.detectedChannelsFile : DETECTED_CHANNELS_FILE);
         // Check if channel already exists
         const existingIndex = channels.findIndex(ch => ch.id === channelId);
         const now = new Date().toISOString();
@@ -2282,7 +2493,7 @@ function addDetectedChannel(channelId, channelInfo = {}) {
             channels = channels.slice(-1000);
         }
         
-        const writeSuccess = writeJson(DETECTED_CHANNELS_FILE, channels);
+        const writeSuccess = writeJson(accountPaths ? accountPaths.detectedChannelsFile : DETECTED_CHANNELS_FILE, channels);
         if (writeSuccess) {
             console.log(`[CHANNEL] Added/Updated detected channel: ${channelId}`);
         } else {
@@ -2296,7 +2507,7 @@ function addDetectedChannel(channelId, channelInfo = {}) {
 
 // Get all detected channels
 function getDetectedChannels() {
-    return readJson(DETECTED_CHANNELS_FILE);
+    return readJson(accountPaths ? accountPaths.detectedChannelsFile : DETECTED_CHANNELS_FILE);
 }
 
 // Proactive channel discovery function
@@ -2366,7 +2577,7 @@ function getDetectedChannelsByType(type) {
 
 // API to get sent messages log
 app.get('/api/sent-messages', (req, res) => {
-    res.json(readJson(SENT_MESSAGES_FILE));
+    res.json(readJson(accountPaths ? accountPaths.sentMessagesFile : SENT_MESSAGES_FILE));
 });
 
 // API to add a sent message log (for resend, etc.)
@@ -2450,8 +2661,11 @@ app.delete('/api/automations/:id', (req, res) => {
     const [removed] = automations.splice(idx, 1);
     writeAutomations(automations);
     // Optionally delete log file
-    if (removed.logFile && fs.existsSync(path.join(__dirname, removed.logFile))) {
-      fs.unlinkSync(path.join(__dirname, removed.logFile));
+    if (removed.logFile && accountPaths) {
+      const logPath = path.join(accountPaths.logsDir, removed.logFile);
+      if (fs.existsSync(logPath)) {
+        fs.unlinkSync(logPath);
+      }
     }
     res.json({ success: true });
   } catch (err) {
@@ -2466,11 +2680,15 @@ app.get('/api/automations/:id/log', (req, res) => {
     if (!automation) return res.status(404).json({ error: 'Automation not found' });
     
     // Get all log files for this automation (including rotated ones)
+    if (!accountPaths) {
+      return res.status(500).json({ error: 'Account paths not initialized' });
+    }
+    
     const baseName = automation.logFile.replace('.json', '');
     const logFiles = [];
     
     // Find all log files for this automation
-    const files = fs.readdirSync(__dirname);
+    const files = fs.readdirSync(accountPaths.logsDir);
     files.forEach(file => {
       if (file.startsWith(baseName) && file.endsWith('.json') && !file.includes('_corrupted_')) {
         logFiles.push(file);
@@ -2489,7 +2707,7 @@ app.get('/api/automations/:id/log', (req, res) => {
     // Read all log files and merge
     let allLogs = [];
     for (const logFile of logFiles) {
-      const logPath = path.join(__dirname, logFile);
+      const logPath = path.join(accountPaths.logsDir, logFile);
       if (fs.existsSync(logPath)) {
         try {
           const fileContent = fs.readFileSync(logPath, 'utf8');
@@ -3448,7 +3666,7 @@ app.post('/api/channels/send', messageUpload.single('media'), async (req, res) =
 
 // Get all templates
 app.get('/api/templates', (req, res) => {
-    res.json(readJson(TEMPLATES_FILE));
+    res.json(readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE));
 });
 
 // Create new template
@@ -3459,7 +3677,7 @@ app.post('/api/templates', templateUpload.single('media'), (req, res) => {
             return res.status(400).json({ error: 'Name and text are required' });
         }
         
-        const templates = readJson(TEMPLATES_FILE);
+        const templates = readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE);
         const template = {
             id: require('crypto').randomUUID(),
             name: name.trim(),
@@ -3484,7 +3702,7 @@ app.post('/api/templates', templateUpload.single('media'), (req, res) => {
         }
         
         templates.push(template);
-        writeJson(TEMPLATES_FILE, templates);
+        writeJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE, templates);
         res.json(template);
     } catch (err) {
         console.error('Create template error:', err);
@@ -3501,7 +3719,7 @@ app.put('/api/templates/:id', templateUpload.single('media'), (req, res) => {
             return res.status(400).json({ error: 'Name and text are required' });
         }
         
-        const templates = readJson(TEMPLATES_FILE);
+        const templates = readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE);
         const templateIndex = templates.findIndex(t => t.id === id);
         if (templateIndex === -1) {
             return res.status(404).json({ error: 'Template not found' });
@@ -3545,7 +3763,7 @@ app.put('/api/templates/:id', templateUpload.single('media'), (req, res) => {
         }
         
         templates[templateIndex] = template;
-        writeJson(TEMPLATES_FILE, templates);
+        writeJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE, templates);
         res.json(template);
     } catch (err) {
         console.error('Update template error:', err);
@@ -3557,7 +3775,7 @@ app.put('/api/templates/:id', templateUpload.single('media'), (req, res) => {
 app.delete('/api/templates/:id', (req, res) => {
     try {
         const { id } = req.params;
-        const templates = readJson(TEMPLATES_FILE);
+        const templates = readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE);
         const templateIndex = templates.findIndex(t => t.id === id);
         if (templateIndex === -1) {
             return res.status(404).json({ error: 'Template not found' });
@@ -3574,7 +3792,7 @@ app.delete('/api/templates/:id', (req, res) => {
         }
         
         templates.splice(templateIndex, 1);
-        writeJson(TEMPLATES_FILE, templates);
+        writeJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE, templates);
         res.json({ success: true });
     } catch (err) {
         console.error('Delete template error:', err);
@@ -3584,7 +3802,7 @@ app.delete('/api/templates/:id', (req, res) => {
 
 // Get sent messages log
 app.get('/api/messages/log', (req, res) => {
-    res.json(readJson(SENT_MESSAGES_FILE));
+    res.json(readJson(accountPaths ? accountPaths.sentMessagesFile : SENT_MESSAGES_FILE));
 });
 
 // Send message (with optional media)
@@ -3659,7 +3877,7 @@ app.post('/api/messages/send', messageUpload.single('media'), async (req, res) =
 app.get('/api/bulk', (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 100;
-    const records = readJson(BULK_FILE);
+    const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
     const start = (page - 1) * limit;
     const end = start + limit;
     res.json({
@@ -3702,9 +3920,9 @@ app.post('/api/bulk-import', csvUpload.single('csv'), (req, res) => {
         }
         
         // Append to bulk file
-        const existing = readJson(BULK_FILE);
+        const existing = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         existing.push(...imported);
-        writeJson(BULK_FILE, existing);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, existing);
         
         res.json({ imported: imported.length, errors });
     } catch (err) {
@@ -3719,7 +3937,7 @@ app.get('/api/bulk-imports', (req, res) => {
     const limit = parseInt(req.query.limit) || 100;
     const importFilename = req.query.import_filename;
     
-    let records = readJson(BULK_FILE);
+    let records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
     
     // Filter by import filename if specified
     if (importFilename) {
@@ -3743,7 +3961,7 @@ app.post('/api/bulk-test/:id', async (req, res) => {
     const recordId = req.params.id;
     
     try {
-        const records = readJson(BULK_FILE);
+        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         const recordIndex = records.findIndex(r => r.unique_id === recordId);
         
         if (recordIndex === -1) {
@@ -3765,7 +3983,7 @@ app.post('/api/bulk-test/:id', async (req, res) => {
         
         // Update the record
         records[recordIndex] = record;
-        writeJson(BULK_FILE, records);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
         
         res.json({ success: true });
     } catch (err) {
@@ -3780,7 +3998,7 @@ app.post('/api/bulk-retry/:filename', async (req, res) => {
     
     try {
         const { filename } = req.params;
-        const bulkMessagesPath = path.join(__dirname, 'bulk_messages.json');
+        const bulkMessagesPath = accountPaths ? accountPaths.bulkFile : path.join(__dirname, 'bulk_messages.json');
         
         if (!fs.existsSync(bulkMessagesPath)) {
             return res.status(404).json({ error: 'Bulk messages file not found' });
@@ -4015,10 +4233,10 @@ app.post('/api/bulk-retry/:filename', async (req, res) => {
 app.delete('/api/bulk-delete/:filename', (req, res) => {
     try {
         const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(BULK_FILE);
+        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         const filteredRecords = records.filter(r => r.import_filename !== filename);
         
-        writeJson(BULK_FILE, filteredRecords);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, filteredRecords);
         
         res.json({ 
             success: true, 
@@ -4034,7 +4252,7 @@ app.delete('/api/bulk-delete/:filename', (req, res) => {
 app.post('/api/bulk-cancel/:filename', (req, res) => {
     try {
         const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(BULK_FILE);
+        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         let cancelledCount = 0;
         
         for (let i = 0; i < records.length; i++) {
@@ -4044,7 +4262,7 @@ app.post('/api/bulk-cancel/:filename', (req, res) => {
             }
         }
         
-        writeJson(BULK_FILE, records);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
         
         res.json({ 
             success: true, 
@@ -4090,9 +4308,9 @@ app.post('/api/bulk/import', csvUpload.single('csv'), (req, res) => {
         }
         
         // Append to bulk file
-        const existing = readJson(BULK_FILE);
+        const existing = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         existing.push(...imported);
-        writeJson(BULK_FILE, existing);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, existing);
         
         res.json({ imported: imported.length, errors });
     } catch (err) {
@@ -4106,7 +4324,7 @@ app.post('/api/bulk/send-now/:uid', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
     
     try {
-        const records = readJson(BULK_FILE);
+        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         const recordIndex = records.findIndex(r => r.unique_id === req.params.uid);
         
         if (recordIndex === -1) {
@@ -4121,7 +4339,7 @@ app.post('/api/bulk/send-now/:uid', async (req, res) => {
         
         // Update the record
         records[recordIndex] = record;
-        writeJson(BULK_FILE, records);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
         
         res.json({ success: true });
     } catch (err) {
@@ -4135,7 +4353,7 @@ app.post('/api/bulk/schedule/:uid', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
     
     try {
-        const records = readJson(BULK_FILE);
+        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         const recordIndex = records.findIndex(r => r.unique_id === req.params.uid);
         
         if (recordIndex === -1) {
@@ -4151,7 +4369,7 @@ app.post('/api/bulk/schedule/:uid', async (req, res) => {
         
         // Update the record
         records[recordIndex] = record;
-        writeJson(BULK_FILE, records);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
         
         res.json({ success: true });
     } catch (err) {
@@ -4164,10 +4382,10 @@ app.post('/api/bulk/schedule/:uid', async (req, res) => {
 app.delete('/api/bulk/:filename', (req, res) => {
     try {
         const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(BULK_FILE);
+        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         const filteredRecords = records.filter(r => r.import_filename !== filename);
         
-        writeJson(BULK_FILE, filteredRecords);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, filteredRecords);
         
         res.json({ 
             success: true, 
@@ -4183,7 +4401,7 @@ app.delete('/api/bulk/:filename', (req, res) => {
 app.post('/api/bulk/cancel/:filename', (req, res) => {
     try {
         const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(BULK_FILE);
+        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
         let cancelledCount = 0;
         
         for (let i = 0; i < records.length; i++) {
@@ -4193,7 +4411,7 @@ app.post('/api/bulk/cancel/:filename', (req, res) => {
             }
         }
         
-        writeJson(BULK_FILE, records);
+        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
         
         res.json({ 
             success: true, 
@@ -4339,7 +4557,7 @@ app.post('/api/channels/discover', async (req, res) => {
 // Get leads data
 app.get('/api/leads', (req, res) => {
     try {
-        const leadsData = readJson(LEADS_FILE);
+        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
         res.json(leadsData);
     } catch (err) {
         console.error('Failed to fetch leads:', err);
@@ -4355,10 +4573,16 @@ app.post('/api/leads', (req, res) => {
             return res.status(400).json({ error: 'Invalid leads data' });
         }
         
-        // Ensure we don't exceed 200 records
-        const limitedLeads = leads.slice(0, 200);
+        // Ensure we don't exceed 2000 records (keep oldest when exceeded)
+        let limitedLeads = leads;
+        if (limitedLeads.length > 2000) {
+            // Sort by created_on (oldest first) and keep only latest 2000
+            limitedLeads = leads
+                .sort((a, b) => new Date(a.created_on) - new Date(b.created_on))
+                .slice(-2000);
+        }
         
-        writeJson(LEADS_FILE, { leads: limitedLeads });
+        writeJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: limitedLeads });
         res.json({ success: true, count: limitedLeads.length });
     } catch (err) {
         console.error('Failed to save leads:', err);
@@ -4369,7 +4593,7 @@ app.post('/api/leads', (req, res) => {
 // Get leads auto chat configuration
 app.get('/api/leads/config', (req, res) => {
     try {
-        const config = readJson(LEADS_CONFIG_FILE, {
+        const config = readJson(accountPaths ? accountPaths.leadsConfigFile : LEADS_CONFIG_FILE, {
             enabled: false,
             systemPrompt: '',
             includeJsonContext: true,
@@ -4396,7 +4620,7 @@ app.post('/api/leads/config', (req, res) => {
             autoReplyPrompt: autoReplyPrompt || ''
         };
         
-        writeJson(LEADS_CONFIG_FILE, config);
+        writeJson(accountPaths ? accountPaths.leadsConfigFile : LEADS_CONFIG_FILE, config);
         console.log('Leads auto chat config saved:', config);
         res.json({ success: true, config });
     } catch (err) {
@@ -4643,7 +4867,7 @@ app.post('/api/leads/process-contacts', async (req, res) => {
         console.log('[LEADS] Processing contacts for leads...');
         
         // Read leads data
-        const leadsData = readJson(LEADS_FILE, { leads: [] });
+        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
         const leadsNeedingContacts = leadsData.leads.filter(lead => 
             lead.contact_added !== true && 
             lead.contact_added !== 'error' &&
@@ -4846,7 +5070,7 @@ app.post('/api/leads/process-contacts', async (req, res) => {
         }
         
         // Save updated leads data
-        writeJson(LEADS_FILE, leadsData);
+        writeJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, leadsData);
         
         const successCount = results.filter(r => r.success).length;
         const errorCount = results.filter(r => !r.success).length;
@@ -5368,7 +5592,7 @@ function processLeadsDataWithMapping(data, fieldMapping) {
 // Get leads configuration
 app.get('/api/leads-config', (req, res) => {
     try {
-        const configPath = path.join(__dirname, 'leads-config.json');
+        const configPath = accountPaths ? accountPaths.leadsConfigFile : path.join(__dirname, 'leads-config.json');
         if (!fs.existsSync(configPath)) {
             return res.status(404).json({ error: 'Leads configuration file not found' });
         }
@@ -5385,7 +5609,13 @@ app.get('/api/leads-config', (req, res) => {
 app.post('/api/leads-config', (req, res) => {
     try {
         const config = req.body;
-        const configPath = path.join(__dirname, 'leads-config.json');
+        const configPath = accountPaths ? accountPaths.leadsConfigFile : path.join(__dirname, 'leads-config.json');
+        
+        // Ensure directory exists
+        const dir = path.dirname(configPath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
         
         fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
         
@@ -6022,7 +6252,37 @@ app.post('/api/cloudflare/process-queue', async (req, res) => {
 });
 
 // Setup backup routes (pass ready as getter function)
-setupBackupRoutes(app, client, () => ready, BACKUP_DIR, BACKUP_LIST_FILE, readJson, writeJson, DETECTED_CHANNELS_FILE);
+// Setup backup routes - will be set up when account is initialized
+let backupRoutesSetup = false;
+function setupBackupRoutesForAccount() {
+    if (!accountPaths) {
+        console.log('[BACKUP] Account paths not initialized, skipping backup routes setup');
+        return;
+    }
+    if (backupRoutesSetup) {
+        console.log('[BACKUP] Backup routes already setup, skipping duplicate setup');
+        return;
+    }
+    try {
+        setupBackupRoutes(
+            app, 
+            client, 
+            () => ready, 
+            accountPaths.backupsDir, 
+            accountPaths.backupListFile, 
+            readJson, 
+            writeJson, 
+            accountPaths.detectedChannelsFile
+        );
+        backupRoutesSetup = true;
+        console.log('[BACKUP] Backup routes setup for account:', currentAccountNumber);
+    } catch (error) {
+        console.error('[BACKUP] Error setting up backup routes:', error);
+    }
+}
+
+// Don't setup backup routes initially - wait for account to be initialized
+// setupBackupRoutesForAccount will be called after account login in the 'ready' event
 
 // Error handling middleware for multer errors
 app.use((error, req, res, next) => {
