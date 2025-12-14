@@ -168,6 +168,9 @@ typings/
 .wwebjs_cache/
 .wwebjs_session/
 
+# Private account data (should never be committed)
+private-data/
+
 # Data files
 *.json
 !package.json
