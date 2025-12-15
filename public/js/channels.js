@@ -21,7 +21,7 @@ let selectedChannel = null;
 let selectedChannelIsAdmin = false;
 let channelMessages = [];
 let incomingChannelMessages = []; // Messages from channels (not @c.us or @g.us)
-let currentFilter = 'admin'; // Default filter
+let currentFilter = 'all'; // Default filter - show all channels
 
 // HTML escape utility (needed for channels.js)
 function escapeHtml(text) {
@@ -41,9 +41,9 @@ function initializeChannels() {
 
     // Setup channel filter status selector
     if (channelFilterStatus) {
-        // Set default value to 'admin'
-        channelFilterStatus.value = 'admin';
-        currentFilter = 'admin';
+        // Set default value to 'all'
+        channelFilterStatus.value = 'all';
+        currentFilter = 'all';
         
         channelFilterStatus.addEventListener('change', () => {
             currentFilter = channelFilterStatus.value;
@@ -65,6 +65,22 @@ function initializeChannels() {
         channelSendForm.addEventListener('submit', handleChannelSendMessage);
         channelAttachment.addEventListener('change', renderChannelAttachmentPreview);
     }
+    
+    // Load channels if page loaded with #channels hash
+    if (window.location.hash === '#channels') {
+        setTimeout(() => {
+            loadChannels();
+            loadIncomingChannelMessages();
+        }, 100);
+    }
+    
+    // Handle hash changes to load channels when navigating to tab
+    window.addEventListener('hashchange', () => {
+        if (window.location.hash === '#channels') {
+            loadChannels();
+            loadIncomingChannelMessages();
+        }
+    });
 }
 
 // Initialize when DOM is loaded
@@ -77,29 +93,35 @@ if (document.readyState === 'loading') {
 // --- Channels Tab Functions ---
 
 // Load channels from the server
-async function loadChannels() {
+async function loadChannels(isBackgroundRefresh = false) {
     if (!channelList) return;
     
-    // Reset channel header
-    const channelHeaderName = document.getElementById('channel-header-name');
-    const channelHeaderLink = document.getElementById('channel-header-link');
-    if (channelHeaderName) {
-        channelHeaderName.textContent = 'Select a channel';
+    // Only reset UI if this is NOT a background refresh
+    if (!isBackgroundRefresh) {
+        // Reset channel header only if no channel selected
+        if (!selectedChannel) {
+            const channelHeaderName = document.getElementById('channel-header-name');
+            const channelHeaderLink = document.getElementById('channel-header-link');
+            if (channelHeaderName) {
+                channelHeaderName.textContent = 'Select a channel';
+            }
+            if (channelHeaderLink) {
+                channelHeaderLink.innerHTML = '';
+            }
+            // Fallback for old channelHeader
+            if (channelHeader && !channelHeaderName) {
+                channelHeader.textContent = 'Select a channel';
+            }
+            
+            channelMessageContainer.innerHTML = '';
+            channelSendForm.classList.add('hidden');
+        }
+        
+        // Show loading state only if no channels loaded yet
+        if (channels.length === 0) {
+            channelList.innerHTML = '<div class="text-gray-500 p-2">Loading channels...</div>';
+        }
     }
-    if (channelHeaderLink) {
-        channelHeaderLink.innerHTML = '';
-    }
-    // Fallback for old channelHeader
-    if (channelHeader && !channelHeaderName) {
-        channelHeader.textContent = 'Select a channel';
-    }
-    
-    channelMessageContainer.innerHTML = '';
-    channelSendForm.classList.add('hidden');
-    selectedChannel = null;
-    
-    // Show loading state
-    channelList.innerHTML = '<div class="text-gray-500 p-2">Loading channels...</div>';
     
     try {
         // STEP 1: Load cached channels IMMEDIATELY (no waiting)
@@ -107,6 +129,7 @@ async function loadChannels() {
         try {
             const cachedResult = await fetch('/api/detected-channels').then(r => r.json());
             allChannels = cachedResult.channels || [];
+            console.log(`[CHANNELS] Loaded ${allChannels.length} channels from cache`);
         } catch (e) {
             console.log('[CHANNELS] No cached channels available');
         }
@@ -119,6 +142,7 @@ async function loadChannels() {
         }
         
         // STEP 2: Fetch fresh data in background (non-blocking)
+        // This will update the JSON and re-render without disturbing UI
         fetchFreshChannelData().catch(err => {
             console.error('[CHANNELS] Background fetch failed:', err);
         });
@@ -127,50 +151,92 @@ async function loadChannels() {
         window.filteredChannels = filteredChannels;
     } catch (err) {
         console.error('Failed to load channels:', err);
-        channelList.innerHTML = `<div class='text-red-600 p-2'>Failed to load channels: ${err.message}</div>`;
+        if (!isBackgroundRefresh) {
+            channelList.innerHTML = `<div class='text-red-600 p-2'>Failed to load channels: ${err.message}</div>`;
+        }
     }
 }
 
 // Fetch fresh channel data from WhatsApp (background, non-blocking)
 async function fetchFreshChannelData() {
     try {
+        console.log('[CHANNELS] Starting background sync...');
+        
+        // First trigger server-side discovery (this updates the JSON)
+        try {
+            await fetch('/api/channels/discover', { method: 'POST' });
+            console.log('[CHANNELS] Server-side discovery triggered');
+        } catch (e) {
+            console.log('[CHANNELS] Server-side discovery skipped (may not be ready)');
+        }
+        
+        // Then fetch fresh data from multiple sources
         const results = await Promise.allSettled([
             fetch('/api/channels/enhanced?method=followed').then(r => r.json()).catch(() => null),
             fetch('/api/channels/enhanced?method=newsletter').then(r => r.json()).catch(() => null)
         ]);
         
         let allChannels = [...channels]; // Start with current channels
+        let hasUpdates = false;
         
-        // Process followed channels
+        // Process followed channels (IMPORTANT: these have accurate isReadOnly status)
         if (results[0].status === 'fulfilled' && results[0].value && results[0].value.channels) {
+            console.log(`[CHANNELS] Got ${results[0].value.channels.length} followed channels`);
             results[0].value.channels.forEach(freshChannel => {
                 const existingIndex = allChannels.findIndex(ch => ch.id === freshChannel.id);
                 if (existingIndex !== -1) {
+                    // Preserve selection state, update other fields
+                    const wasSelected = selectedChannel && selectedChannel.id === freshChannel.id;
                     allChannels[existingIndex] = { ...allChannels[existingIndex], ...freshChannel, cached: false };
+                    if (wasSelected) {
+                        selectedChannel = allChannels[existingIndex];
+                    }
+                    hasUpdates = true;
                 } else {
                     allChannels.push(freshChannel);
+                    hasUpdates = true;
                 }
             });
         }
         
         // Process newsletter channels
         if (results[1].status === 'fulfilled' && results[1].value && results[1].value.channels) {
+            console.log(`[CHANNELS] Got ${results[1].value.channels.length} newsletter channels`);
             results[1].value.channels.forEach(freshChannel => {
                 const existingIndex = allChannels.findIndex(ch => ch.id === freshChannel.id);
                 if (existingIndex !== -1) {
                     allChannels[existingIndex] = { ...allChannels[existingIndex], ...freshChannel, cached: false };
+                    hasUpdates = true;
                 } else {
                     allChannels.push(freshChannel);
+                    hasUpdates = true;
                 }
             });
         }
         
-        // Update channels and re-render if we got fresh data
-        if (allChannels.length > channels.length) {
+        // Update channels and re-render only if we have updates
+        if (hasUpdates) {
             channels = allChannels;
             window.channels = channels;
-            filterChannels();
+            filterChannels(); // Re-render with fresh data
+            console.log(`[CHANNELS] Updated to ${channels.length} channels`);
         }
+        
+        // Reload from cache to ensure we have the latest JSON data
+        setTimeout(async () => {
+            try {
+                const cachedResult = await fetch('/api/detected-channels').then(r => r.json());
+                if (cachedResult.channels && cachedResult.channels.length > 0) {
+                    channels = cachedResult.channels;
+                    window.channels = channels;
+                    filterChannels();
+                    console.log(`[CHANNELS] Reloaded ${channels.length} channels from updated cache`);
+                }
+            } catch (e) {
+                // Ignore cache reload errors
+            }
+        }, 2000); // Wait 2 seconds for server to finish updating JSON
+        
     } catch (err) {
         console.error('[CHANNELS] Fresh data fetch failed:', err);
     }
