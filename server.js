@@ -1465,7 +1465,7 @@ client.on('message', async (msg) => {
             const chat = await client.getChatById(from);
             if (chat) {
                 if (chat.name) {
-                    channelName = chat.name;
+                channelName = chat.name;
                 }
                 // CRITICAL: Capture admin status (isReadOnly: false means admin)
                 if (chat.isChannel) {
@@ -1830,14 +1830,97 @@ setInterval(async () => {
         // Send message with contact management
         try {
             const normalizedNumber = r.number.trim();
-            let chatId = !normalizedNumber.endsWith('@c.us') && !normalizedNumber.endsWith('@g.us')
-                ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
-                : normalizedNumber;
             
-            // Check if this is a group (ends with @g.us)
-            const isGroup = chatId.endsWith('@g.us');
+            // Detect recipient type: channel, group, or individual
+            const isChannel = normalizedNumber.includes('@newsletter') || normalizedNumber.includes('@broadcast');
+            const isGroup = normalizedNumber.endsWith('@g.us');
             
-            // For groups, verify we can access the group chat
+            let chatId;
+            if (isChannel) {
+                // Channel - use the ID as-is
+                chatId = normalizedNumber;
+            } else if (isGroup) {
+                // Group - use the ID as-is
+                chatId = normalizedNumber;
+            } else if (normalizedNumber.endsWith('@c.us')) {
+                // Already formatted individual contact
+                chatId = normalizedNumber;
+            } else {
+                // Individual contact - format it
+                chatId = normalizedNumber.replace(/[^0-9]/g, '') + '@c.us';
+            }
+            
+            // Handle CHANNEL messages
+            if (isChannel) {
+                try {
+                    const channel = await client.getChatById(chatId);
+                    if (!channel) {
+                        throw new Error(`Channel not found: ${chatId}`);
+                    }
+                    if (!channel.isChannel) {
+                        throw new Error(`Not a channel: ${chatId}`);
+                    }
+                    if (channel.isReadOnly) {
+                        throw new Error(`No admin rights for channel: ${channel.name || chatId}. Cannot send messages.`);
+                    }
+                    console.log(`[BULK] Channel verified with admin rights: ${channel.name || chatId}`);
+                    
+                    // Send message to channel
+                    console.log(`[BULK-SCHEDULER] Sending to CHANNEL: ${channel.name || chatId}`);
+                    await retryOperation(async () => {
+                        if (r.media) {
+                            console.log(`[BULK-SCHEDULER] Processing media for channel ${chatId}: ${r.media}`);
+                            let media;
+                            if (r.media.startsWith('http')) {
+                                const fetch = require('node-fetch');
+                                const resp = await fetch(r.media);
+                                if (!resp.ok) throw new Error('Failed to fetch media');
+                                const buf = await resp.buffer();
+                                const contentType = resp.headers.get('content-type') || 'application/octet-stream';
+                                media = new MessageMedia(contentType, buf.toString('base64'));
+                            } else {
+                                let absPath = r.media;
+                                if (r.media.startsWith('/message-templates/') || r.media.startsWith('/')) {
+                                    absPath = path.join(__dirname, 'public', r.media);
+                                } else if (!path.isAbsolute(r.media)) {
+                                    absPath = path.join(__dirname, 'public', 'message-templates', r.media);
+                                }
+                                
+                                if (!fs.existsSync(absPath)) {
+                                    throw new Error(`Media file not found: ${r.media}`);
+                                }
+                                
+                                const buf = fs.readFileSync(absPath);
+                                const mime = require('mime-types').lookup(absPath) || 'application/octet-stream';
+                                media = new MessageMedia(mime, buf.toString('base64'), path.basename(absPath));
+                            }
+                            const result = await channel.sendMessage(media, { caption: r.message });
+                            console.log(`[BULK-SCHEDULER] Channel message with media sent:`, result?.id?._serialized || 'no id');
+                        } else {
+                            const result = await channel.sendMessage(r.message);
+                            console.log(`[BULK-SCHEDULER] Channel message sent:`, result?.id?._serialized || 'no id');
+                        }
+                    }, 3, 2000);
+                    
+                    records[i].status = 'sent';
+                    records[i].sent_datetime = new Date().toISOString();
+                    changed = true;
+                    writeJson(accountPaths.bulkFile, records);
+                    await new Promise(res => setTimeout(res, BULK_SEND_DELAY_SEC * 1000));
+                    continue; // Skip to next message
+                    
+                } catch (channelErr) {
+                    console.error(`[BULK] Channel send failed for ${chatId}:`, channelErr.message);
+                    records[i].status = 'failed';
+                    records[i].sent_datetime = new Date().toISOString();
+                    records[i].error = `Channel send failed: ${channelErr.message}`;
+                    changed = true;
+                    writeJson(accountPaths.bulkFile, records);
+                    continue; // Skip to next message
+                }
+            }
+            
+            // Handle GROUP messages
             if (isGroup) {
                 try {
                     const groupChat = await client.getChatById(chatId);
@@ -1855,7 +1938,7 @@ setInterval(async () => {
                     writeJson(accountPaths.bulkFile, records);
                     continue; // Skip to next message
                 }
-            } else {
+            } else if (!isChannel) {
                 // For individual contacts, check if contact exists and add if needed
                 let contactExists = false;
                 let existingContact = null;
