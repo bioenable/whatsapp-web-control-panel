@@ -1470,20 +1470,41 @@
 
     // Load auto chat configuration
     function loadAutoChatConfig() {
+        const toggle = document.getElementById('leads-auto-chat-toggle');
+        
+        // IMPORTANT: Always start with unchecked state
+        if (toggle) {
+            toggle.checked = false;
+        }
+        
         fetch('/api/leads-config')
             .then(response => response.json())
             .then(config => {
                 console.log('Loaded auto chat config:', config);
-                const toggle = document.getElementById('leads-auto-chat-toggle');
                 if (toggle) {
-                    toggle.checked = config.enabled || false;
+                    // Only set to true if explicitly enabled in config
+                    toggle.checked = config.enabled === true;
                     // Trigger the background color update
                     const event = new Event('change');
                     toggle.dispatchEvent(event);
                 }
+                // Update local config
+                autoChatConfig = {
+                    enabled: config.enabled === true,
+                    systemPrompt: config.systemPrompt || '',
+                    includeJsonContext: config.includeJsonContext !== false,
+                    autoReply: config.autoReply === true,
+                    autoReplyPrompt: config.autoReplyPrompt || ''
+                };
             })
             .catch(error => {
                 console.error('Error loading auto chat config:', error);
+                // Explicitly set to unchecked on error
+                if (toggle) {
+                    toggle.checked = false;
+                    const event = new Event('change');
+                    toggle.dispatchEvent(event);
+                }
             });
     }
 

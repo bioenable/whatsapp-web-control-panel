@@ -337,15 +337,34 @@ function setupLeadsRoutes(app, {
         try {
             const accountPathsObj = getAccountPaths();
             const configPath = accountPathsObj ? accountPathsObj.leadsConfigFile : path.join(__dirname, '../../leads-config.json');
+            
+            // Return default config if file doesn't exist (enabled: false by default)
+            const defaultConfig = {
+                enabled: false,
+                systemPrompt: '',
+                includeJsonContext: true,
+                autoReply: false,
+                autoReplyPrompt: ''
+            };
+            
             if (!fs.existsSync(configPath)) {
-                return res.status(404).json({ error: 'Leads configuration file not found' });
+                return res.json(defaultConfig);
             }
             
             const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            // Ensure enabled defaults to false if not set
+            config.enabled = config.enabled === true;
             res.json(config);
         } catch (err) {
             console.error('Error reading leads config:', err);
-            res.status(500).json({ error: 'Failed to read leads configuration' });
+            // Return default config on error (enabled: false)
+            res.json({
+                enabled: false,
+                systemPrompt: '',
+                includeJsonContext: true,
+                autoReply: false,
+                autoReplyPrompt: ''
+            });
         }
     });
 
