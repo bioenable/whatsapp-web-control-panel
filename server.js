@@ -1354,12 +1354,35 @@ client.on('ready', async () => {
     try {
         chatsCache = await client.getChats();
         console.log(`Loaded ${chatsCache.length} chats`);
+        
+        // Detect all channels from initial chat load
+        const initialChannels = chatsCache.filter(chat => chat.isChannel);
+        console.log(`[CHANNEL-INIT] Found ${initialChannels.length} channels in initial chat load`);
+        
+        let adminCount = 0;
+        for (const channel of initialChannels) {
+            const isAdmin = !channel.isReadOnly;
+            if (isAdmin) adminCount++;
+            
+            addDetectedChannel(channel.id._serialized, {
+                name: channel.name,
+                type: isAdmin ? 'admin' : 'subscriber',
+                isReadOnly: channel.isReadOnly,
+                isNewsletter: channel.id._serialized.endsWith('@newsletter'),
+                isBroadcast: channel.id._serialized === 'status@broadcast',
+                isChannel: true,
+                lastSeen: new Date().toISOString(),
+                detectedFrom: 'initial_chat_load'
+            });
+        }
+        console.log(`[CHANNEL-INIT] Added ${initialChannels.length} channels (${adminCount} admin) from initial load`);
+        
     } catch (err) {
         console.error('Failed to load chats:', err.message);
         chatsCache = [];
     }
     
-    // Run initial channel discovery
+    // Run additional channel discovery (finds newsletters and other sources)
     discoverChannels();
     
     // Set up periodic channel discovery (every 5 minutes)
@@ -1434,25 +1457,38 @@ client.on('message', async (msg) => {
             channelType: channelType
         };
         
-        // Try to get channel name from the chat if available
+        // Try to get channel info from the chat - including admin status
         let channelName = from;
+        let isReadOnly = true; // Default to read-only
+        let isChannel = false;
         try {
             const chat = await client.getChatById(from);
-            if (chat && chat.name) {
-                channelName = chat.name;
+            if (chat) {
+                if (chat.name) {
+                    channelName = chat.name;
+                }
+                // CRITICAL: Capture admin status (isReadOnly: false means admin)
+                if (chat.isChannel) {
+                    isChannel = true;
+                    isReadOnly = chat.isReadOnly;
+                    console.log(`[CHANNEL-STREAM] Detected channel: ${channelName} (${isReadOnly ? 'read-only' : 'ADMIN'})`);
+                }
             }
         } catch (error) {
-            console.log(`Could not get chat name for ${from}:`, error.message);
+            console.log(`Could not get chat info for ${from}:`, error.message);
         }
         
-        // Store in detected channels file with enhanced information
+        // Store in detected channels file with admin status
         addDetectedChannel(from, {
             name: channelName,
             lastMessage: msg.body ? msg.body.substring(0, 100) : '',
             lastSeen: new Date().toISOString(),
-            type: channelType,
+            type: isReadOnly === false ? 'admin' : channelType,
+            isReadOnly: isReadOnly,
             isNewsletter: channelType === 'newsletter',
-            isBroadcast: channelType === 'broadcast'
+            isBroadcast: channelType === 'broadcast',
+            isChannel: isChannel,
+            detectedFrom: 'message_stream'
         });
         
         // Immediate sync for channel messages (event-driven)
@@ -1504,6 +1540,69 @@ client.on('message', async (msg) => {
         // 2. Check leads auto-reply if no automation handled it
         if (!processed) {
             await handleLeadsAutoReply(msg);
+        }
+    }
+});
+
+// message_create fires for ALL messages (incoming and outgoing)
+// This helps catch channels we might have missed
+client.on('message_create', async (msg) => {
+    // Only process channel messages we didn't already handle
+    const from = msg.from || msg.author;
+    if (!from) return;
+    
+    const isChannelMessage = from && (
+        from.endsWith('@newsletter') || 
+        from.endsWith('@broadcast') || 
+        from === 'status@broadcast'
+    );
+    
+    if (isChannelMessage && !msg.fromMe) {
+        // Channel message - ensure it's in our detected list
+        try {
+            const chat = await client.getChatById(from);
+            if (chat && chat.isChannel) {
+                const isAdmin = !chat.isReadOnly;
+                console.log(`[CHANNEL-CREATE] Channel detected: ${chat.name || from} (${isAdmin ? 'ADMIN' : 'read-only'})`);
+                
+                addDetectedChannel(from, {
+                    name: chat.name || from,
+                    lastMessage: msg.body ? msg.body.substring(0, 100) : '',
+                    lastSeen: new Date().toISOString(),
+                    type: isAdmin ? 'admin' : 'subscriber',
+                    isReadOnly: chat.isReadOnly,
+                    isNewsletter: from.endsWith('@newsletter'),
+                    isBroadcast: from.endsWith('@broadcast') || from === 'status@broadcast',
+                    isChannel: true,
+                    detectedFrom: 'message_create'
+                });
+            }
+        } catch (error) {
+            // Silently ignore - the message handler will catch most channels
+        }
+    }
+    
+    // If WE sent a message to a channel (fromMe), we're definitely admin
+    if (isChannelMessage && msg.fromMe) {
+        try {
+            const chat = await client.getChatById(from);
+            if (chat && chat.isChannel) {
+                console.log(`[CHANNEL-CREATE] Admin channel confirmed (we sent a message): ${chat.name || from}`);
+                
+                addDetectedChannel(from, {
+                    name: chat.name || from,
+                    lastMessage: msg.body ? msg.body.substring(0, 100) : '',
+                    lastSeen: new Date().toISOString(),
+                    type: 'admin',
+                    isReadOnly: false, // We sent a message, so we're definitely admin
+                    isNewsletter: from.endsWith('@newsletter'),
+                    isBroadcast: from.endsWith('@broadcast') || from === 'status@broadcast',
+                    isChannel: true,
+                    detectedFrom: 'message_sent_by_us'
+                });
+            }
+        } catch (error) {
+            // Silently ignore
         }
     }
 });
