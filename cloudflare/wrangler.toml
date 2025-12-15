@@ -1,7 +1,0 @@
-name = "geosquare-redirector"
-main = "src/index.js"
-compatibility_date = "2024-09-23"
-compatibility_flags = ["nodejs_compat"]
-
-# Route configuration will be set manually in Cloudflare dashboard
-# after deployment to handle *.geosquare.in/* 

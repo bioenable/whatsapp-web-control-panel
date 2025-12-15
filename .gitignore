@@ -226,7 +226,9 @@ tmp/
 ehthumbs.db
 Thumbs.db
 
-# Cloudflare
+# Cloudflare Workers (server-side deployment code)
+cloudflare/
 .wrangler/
 
-# External dependencies are now managed by npmbackups/
+# Legacy backups folder (now in private-data)
+backups/

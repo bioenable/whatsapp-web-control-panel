@@ -85,6 +85,11 @@ function initializeJsonFiles() {
 function readJson(file, fallback = []) {
     try {
         if (!fs.existsSync(file)) {
+            // Ensure directory exists before creating file
+            const dir = path.dirname(file);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
             // Create file with fallback content if it doesn't exist
             fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
             console.log(`[INIT] Auto-created missing file: ${path.basename(file)}`);
@@ -95,6 +100,11 @@ function readJson(file, fallback = []) {
         console.error(`[ERROR] Failed to read ${path.basename(file)}:`, e.message);
         // Try to create file with fallback content
         try {
+            // Ensure directory exists before creating file
+            const dir = path.dirname(file);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
             fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
             console.log(`[INIT] Recreated corrupted file: ${path.basename(file)}`);
         } catch (writeError) {
