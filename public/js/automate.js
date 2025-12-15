@@ -104,6 +104,35 @@
                 handleAutomationSubmit(e);
             });
         }
+
+        // Load automations on page load if automate tab is active
+        // Check URL hash first
+        if (window.location.hash === '#automate') {
+            // Small delay to ensure DOM is ready and tab switching is complete
+            setTimeout(() => {
+                loadAutomations();
+                quickTestGenai();
+            }, 200);
+        } else {
+            // Also check if automate pane is visible (in case hash wasn't set but tab is active)
+            const automatePane = document.getElementById('automate');
+            if (automatePane && !automatePane.classList.contains('hidden')) {
+                setTimeout(() => {
+                    loadAutomations();
+                    quickTestGenai();
+                }, 200);
+            }
+        }
+        
+        // Listen for hash changes to load automations when navigating to automate tab
+        window.addEventListener('hashchange', () => {
+            if (window.location.hash === '#automate') {
+                setTimeout(() => {
+                    loadAutomations();
+                    quickTestGenai();
+                }, 100);
+            }
+        });
     }
 
     // Automation Action Functions
@@ -251,6 +280,167 @@
                 loadAutomations();
             })
             .catch(err => alert('Failed to delete automation: ' + err.message));
+    }
+
+    function handleTestAutomation(id) {
+        const automationContainer = document.querySelector(`[data-automation-id="${id}"]`);
+        if (!automationContainer) {
+            alert('Automation container not found');
+            return;
+        }
+
+        // Remove any existing test status container
+        const existingTestStatus = automationContainer.querySelector('.automation-test-status');
+        if (existingTestStatus) {
+            existingTestStatus.remove();
+        }
+
+        // Create test status container
+        const testStatusContainer = document.createElement('div');
+        testStatusContainer.className = 'automation-test-status mt-4 p-4 bg-purple-50 border border-purple-200 rounded-lg';
+        testStatusContainer.innerHTML = `
+            <div class="flex items-center justify-between mb-3">
+                <h4 class="font-semibold text-purple-800">Test Execution Status</h4>
+                <button class="text-purple-600 hover:text-purple-800 text-sm" onclick="this.closest('.automation-test-status').remove()">✕ Close</button>
+            </div>
+            <div class="space-y-2 text-sm">
+                <div class="test-status-item flex items-center gap-2 text-gray-700" data-step="init">
+                    <span class="status-icon text-lg">⏳</span>
+                    <span class="status-text">Initializing test...</span>
+                </div>
+            </div>
+        `;
+
+        // Insert test status container after the automation info
+        const automationInfo = automationContainer.querySelector('.flex-1');
+        if (automationInfo) {
+            automationInfo.appendChild(testStatusContainer);
+        } else {
+            automationContainer.appendChild(testStatusContainer);
+        }
+
+        const btn = document.querySelector(`.automation-test-btn[data-id="${id}"]`);
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Testing...';
+        }
+
+        // Update status function
+        const updateStatus = (step, icon, text, isComplete = false) => {
+            const statusContainer = testStatusContainer.querySelector('.space-y-2');
+            let statusItem = statusContainer.querySelector(`[data-step="${step}"]`);
+            
+            if (!statusItem) {
+                statusItem = document.createElement('div');
+                statusItem.className = 'test-status-item';
+                statusItem.setAttribute('data-step', step);
+                statusContainer.appendChild(statusItem);
+            }
+            
+            statusItem.className = 'test-status-item flex items-center gap-2 text-gray-700';
+            statusItem.innerHTML = `
+                <span class="status-icon text-lg">${icon}</span>
+                <span class="status-text">${text}</span>
+            `;
+            
+            if (isComplete) {
+                statusItem.classList.add('text-green-700', 'font-medium');
+            }
+        };
+
+        // Show initial status
+        updateStatus('init', '⏳', 'Starting test execution...');
+
+        // Start the test
+        fetch(`/api/automations/${id}/test`, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) throw new Error(data.error);
+
+                const testLog = data.testLog || {};
+                
+                // Update status for Step 1
+                if (testLog.step1) {
+                    if (testLog.step1.success) {
+                        updateStatus('step1', '✅', 'Step 1: Gemini API called successfully - Response received');
+                    } else {
+                        updateStatus('step1', '❌', `Step 1: Failed - ${testLog.step1.error || 'Unknown error'}`);
+                    }
+                } else {
+                    updateStatus('step1', '⏳', 'Step 1: Calling Gemini API...');
+                }
+
+                // Update status for Step 2
+                if (testLog.step2) {
+                    if (testLog.step2.success) {
+                        updateStatus('step2', '✅', 'Step 2: JSON parsing completed successfully');
+                    } else {
+                        updateStatus('step2', '⚠️', `Step 2: Failed - ${testLog.step2.error || 'Unknown error'} (using Step 1 response)`);
+                    }
+                } else {
+                    updateStatus('step2', '⏳', 'Step 2: Parsing response to JSON...');
+                }
+
+                // Update status for final message
+                if (testLog.final) {
+                    if (testLog.final.sent) {
+                        updateStatus('send', '✅', `Message sent successfully to ${testLog.final.sentTo || 'recipient'}`);
+                    } else {
+                        const reason = testLog.final.reason || testLog.final.sendError || 'Unknown reason';
+                        updateStatus('send', '⚠️', `Message not sent: ${reason}`);
+                    }
+                }
+
+                // Add log file information
+                if (testLog.logFile) {
+                    const logFileItem = document.createElement('div');
+                    logFileItem.className = 'test-status-item mt-3 pt-3 border-t border-purple-200';
+                    logFileItem.innerHTML = `
+                        <div class="flex items-start gap-2">
+                            <span class="status-icon text-lg">📄</span>
+                            <div class="flex-1">
+                                <div class="font-medium text-purple-800 mb-1">Detailed Log File:</div>
+                                <div class="font-mono text-xs text-purple-600 bg-purple-100 p-2 rounded break-all">${escapeHtml(testLog.logFile)}</div>
+                                <div class="text-xs text-gray-600 mt-1">Check the logs folder for complete execution details</div>
+                            </div>
+                        </div>
+                    `;
+                    testStatusContainer.querySelector('.space-y-2').appendChild(logFileItem);
+                }
+
+                // Add summary
+                const summaryItem = document.createElement('div');
+                summaryItem.className = 'test-status-item flex items-center gap-2 mt-3 pt-3 border-t border-purple-300 font-semibold';
+                const summaryText = testLog.final?.sent 
+                    ? 'Test completed successfully - Message was sent'
+                    : 'Test completed - Message was not sent';
+                summaryItem.innerHTML = `
+                    <span class="status-icon text-lg">${testLog.final?.sent ? '✅' : '⚠️'}</span>
+                    <span class="status-text ${testLog.final?.sent ? 'text-green-700' : 'text-yellow-700'}">${summaryText}</span>
+                `;
+                testStatusContainer.querySelector('.space-y-2').appendChild(summaryItem);
+
+                // Reload automations to show updated logs
+                loadAutomations();
+            })
+            .catch(err => {
+                console.error('Test automation error:', err);
+                updateStatus('error', '❌', `Test failed: ${err.message}`);
+                
+                const errorItem = document.createElement('div');
+                errorItem.className = 'test-status-item flex items-center gap-2 mt-3 pt-3 border-t border-red-200 text-red-700';
+                errorItem.innerHTML = `
+                    <span class="status-icon text-lg">❌</span>
+                    <span class="status-text">Error: ${escapeHtml(err.message)}</span>
+                `;
+                testStatusContainer.querySelector('.space-y-2').appendChild(errorItem);
+            })
+            .finally(() => {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Test';
+                }
+            });
     }
 
     function handlePauseAutomation(id, action) {
@@ -482,6 +672,7 @@
                             </div>
                             
                             <div class="flex flex-wrap gap-2 lg:flex-col lg:flex-shrink-0">
+                                <button class="automation-test-btn bg-purple-600 text-white px-3 py-1 rounded text-xs hover:bg-purple-700 transition-colors" data-id="${a.id}">Test</button>
                                 <button class="automation-edit-btn bg-blue-600 text-white px-3 py-1 rounded text-xs hover:bg-blue-700 transition-colors" data-id="${a.id}">Edit</button>
                                 <button class="automation-delete-btn bg-red-600 text-white px-3 py-1 rounded text-xs hover:bg-red-700 transition-colors" data-id="${a.id}">Delete</button>
                                 <button class="automation-pause-btn ${a.status === 'paused' ? 'bg-green-600 hover:bg-green-700' : 'bg-yellow-500 hover:bg-yellow-600'} text-white px-3 py-1 rounded text-xs transition-colors" data-id="${a.id}">${a.status === 'paused' ? 'Resume' : 'Pause'}</button>
@@ -493,6 +684,12 @@
             }).join('');
             
             // Attach event listeners
+            document.querySelectorAll('.automation-test-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    handleTestAutomation(btn.dataset.id);
+                });
+            });
             document.querySelectorAll('.automation-edit-btn').forEach(btn => {
                 btn.addEventListener('click', () => openEditAutomationModal(btn.dataset.id));
             });

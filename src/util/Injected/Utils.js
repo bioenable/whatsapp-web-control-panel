@@ -241,15 +241,59 @@ exports.LoadUtils = () => {
             delete options.invokedBotWid;
         }
 
-        const lidUser = window.Store.User.getMaybeMeLidUser();
-        const meUser = window.Store.User.getMaybeMeUser();
+        // Get user info - WhatsApp Web API changed method names
+        // OLD: getMaybeMeUser, getMaybeMeLidUser
+        // NEW: getMaybeMePnUser (PN = Phone Number), getMaybeMeLidUser (LID = alternate ID)
+        let lidUser, meUser;
+        
+        // Get LID user (for LID addressing mode in groups)
+        if (typeof window.Store?.User?.getMaybeMeLidUser === 'function') {
+            try {
+                lidUser = window.Store.User.getMaybeMeLidUser();
+            } catch (e) {
+                // Ignore - optional
+            }
+        }
+        
+        // Get main user - try new method name first, then old
+        if (typeof window.Store?.User?.getMaybeMePnUser === 'function') {
+            // New method name (current WhatsApp Web)
+            meUser = window.Store.User.getMaybeMePnUser();
+        } else if (typeof window.Store?.User?.getMaybeMeUser === 'function') {
+            // Old method name (legacy WhatsApp Web)
+            meUser = window.Store.User.getMaybeMeUser();
+        }
+        
+        if (!meUser) {
+            throw new Error('Cannot get current user: neither getMaybeMePnUser nor getMaybeMeUser available');
+        }
+        
         const newId = await window.Store.MsgKey.newId();
         let from = chat.id.isLid() ? lidUser : meUser;
         let participant;
 
         if (typeof chat.id?.isGroup === 'function' && chat.id.isGroup()) {
             from = chat.groupMetadata && chat.groupMetadata.isLidAddressingMode ? lidUser : meUser;
-            participant = window.Store.WidFactory.toUserWidOrThrow(from);
+            
+            // Get participant WID - handle both old and new API
+            // toUserWidOrThrow may not exist in newer WhatsApp Web versions
+            if (typeof window.Store.WidFactory?.toUserWidOrThrow === 'function') {
+                participant = window.Store.WidFactory.toUserWidOrThrow(from);
+            } else if (typeof window.Store.WidFactory?.createUserWid === 'function') {
+                // Try createUserWid as alternative
+                participant = window.Store.WidFactory.createUserWid(from._serialized || from.user + '@c.us');
+            } else if (typeof window.Store.WidFactory?.createWid === 'function') {
+                // Fallback to createWid
+                const widStr = from._serialized || (from.user ? from.user + '@c.us' : null);
+                if (widStr) {
+                    participant = window.Store.WidFactory.createWid(widStr);
+                } else {
+                    participant = from; // Use from directly as last resort
+                }
+            } else {
+                // Last resort: use from directly
+                participant = from;
+            }
         }
 
         const newMsgKey = new window.Store.MsgKey({
@@ -331,7 +375,8 @@ exports.LoadUtils = () => {
 
         if (options.waitUntilMsgSent) await sendMsgResultPromise;
 
-        return window.Store.Msg.get(newMsgKey._serialized);
+        const result = window.Store.Msg.get(newMsgKey._serialized);
+        return result;
     };
 	
     window.WWebJS.editMessage = async (msg, content, options = {}) => {
@@ -856,7 +901,80 @@ exports.LoadUtils = () => {
 
     window.WWebJS.rejectCall = async (peerJid, id) => {
         peerJid = peerJid.split('@')[0] + '@s.whatsapp.net';
-        let userId = window.Store.User.getMaybeMeUser().user + '@s.whatsapp.net';
+        
+        // Get current user - handle both old and new WhatsApp Web versions
+        // Priority: ContactCollection.getMeContact (newer) > getMaybeMeUser (legacy) > User object
+        let meUser;
+        try {
+            // Method 1: Try getMeContact first (newer versions - most reliable)
+            if (window.Store.ContactCollection && typeof window.Store.ContactCollection.getMeContact === 'function') {
+                const meContact = window.Store.ContactCollection.getMeContact();
+                if (meContact) {
+                    meUser = meContact.wid || meContact;
+                }
+            }
+            
+            // Method 2: Try getMaybeMeUser function (legacy) - only if Method 1 didn't work
+            if (!meUser && window.Store.User && typeof window.Store.User.getMaybeMeUser === 'function') {
+                meUser = window.Store.User.getMaybeMeUser();
+            }
+            
+            // Method 3: Try User as direct object with wid property
+            if (!meUser && window.Store.User && window.Store.User.wid) {
+                meUser = window.Store.User.wid;
+            }
+            
+            // Method 4: Try User as direct object with _serialized
+            if (!meUser && window.Store.User && window.Store.User._serialized) {
+                meUser = window.Store.User;
+            }
+            
+            // Method 5: Try User as direct object (some versions export the user directly)
+            if (!meUser && window.Store.User && window.Store.User.user) {
+                // Create a wid-like object from user string
+                const userStr = window.Store.User.user;
+                meUser = window.Store.WidFactory ? window.Store.WidFactory.createWid(userStr + '@c.us') : { user: userStr };
+            }
+            
+            if (!meUser) {
+                throw new Error('No valid method to get current user - all methods failed');
+            }
+        } catch (e) {
+            // Final fallback: try ContactCollection again with error handling
+            try {
+                if (window.Store.ContactCollection && typeof window.Store.ContactCollection.getMeContact === 'function') {
+                    const meContact = window.Store.ContactCollection.getMeContact();
+                    if (meContact) {
+                        meUser = meContact.wid || meContact;
+                    }
+                }
+                if (!meUser) {
+                    throw new Error('Unable to get current user information: ' + (e.message || 'Unknown error'));
+                }
+            } catch (e2) {
+                throw new Error('Unable to get current user information: ' + (e2.message || 'Unknown error') + '. Original error: ' + (e.message || 'Unknown'));
+            }
+        }
+        
+        // Extract user ID from meUser object
+        let userId;
+        if (meUser?.user) {
+            userId = meUser.user + '@s.whatsapp.net';
+        } else if (meUser?._serialized) {
+            userId = meUser._serialized.replace('@c.us', '@s.whatsapp.net');
+        } else if (typeof meUser === 'string') {
+            userId = meUser.replace('@c.us', '@s.whatsapp.net');
+        } else if (meUser && window.Store.WidFactory) {
+            // Try to extract from wid object
+            try {
+                const widStr = meUser.toString ? meUser.toString() : (meUser._serialized || meUser.user || String(meUser));
+                userId = widStr.replace('@c.us', '@s.whatsapp.net');
+            } catch (e) {
+                throw new Error('Unable to extract user ID from user object: ' + e.message);
+            }
+        } else {
+            throw new Error('Unable to extract user ID from user object - invalid structure');
+        }
         const stanza = window.Store.SocketWap.wap('call', {
             id: window.Store.SocketWap.generateId(),
             from: window.Store.SocketWap.USER_JID(userId),

@@ -353,9 +353,16 @@ async function loadBackupList() {
                                 <div>Last backup: ${lastBackupTime}</div>
                             </div>
                         </div>
-                        <button class="backup-now-btn ml-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm" data-chat-id="${backup.chatId}" data-chat-name="${escapeHtml(backup.chatName)}">
-                            Backup Now
-                        </button>
+                        <div class="flex gap-2 ml-4">
+                            <button class="backup-now-btn px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm" data-chat-id="${backup.chatId}" data-chat-name="${escapeHtml(backup.chatName)}">
+                                Backup Now
+                            </button>
+                            <button class="backup-delete-btn px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 text-sm" data-chat-id="${backup.chatId}" data-chat-name="${escapeHtml(backup.chatName)}" title="Delete backup">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                </svg>
+                            </button>
+                        </div>
                     </div>
                     <div class="backup-progress-container mt-3 hidden" data-chat-id="${backup.chatId}">
                         <div class="bg-gray-50 rounded p-3 max-h-48 overflow-y-auto">
@@ -445,6 +452,17 @@ async function loadBackupList() {
                 const chatId = e.target.dataset.chatId;
                 const chatName = e.target.dataset.chatName;
                 await handleBackupNow(chatId, chatName, e.target);
+            });
+        });
+        
+        // Add event listeners for Delete buttons
+        document.querySelectorAll('.backup-delete-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation(); // Prevent triggering parent click
+                const button = e.target.closest('.backup-delete-btn');
+                const chatId = button.dataset.chatId;
+                const chatName = button.dataset.chatName;
+                await handleDeleteBackup(chatId, chatName, button);
             });
         });
     } catch (error) {
@@ -545,6 +563,59 @@ async function handleBackupNow(chatId, chatName, buttonElement) {
         if (progressLogs) {
             progressLogs.innerHTML += `<div class="text-red-600">ERROR: ${escapeHtml(error.message)}</div>`;
         }
+    }
+}
+
+// Handle Delete Backup button click
+async function handleDeleteBackup(chatId, chatName, buttonElement) {
+    // Confirm deletion
+    const confirmed = confirm(`Are you sure you want to delete the backup for "${chatName}"?\n\nThis will remove the backup entry and delete any saved backup files.`);
+    
+    if (!confirmed) return;
+    
+    // Disable button and show loading state
+    const originalHTML = buttonElement.innerHTML;
+    buttonElement.disabled = true;
+    buttonElement.innerHTML = '<svg class="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none" opacity="0.25"></circle><path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" fill="currentColor" opacity="0.75"></path></svg>';
+    buttonElement.classList.add('opacity-50', 'cursor-not-allowed');
+    
+    try {
+        const response = await fetch(`/api/backup/${encodeURIComponent(chatId)}`, {
+            method: 'DELETE'
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok && data.success) {
+            // Remove the backup card from the UI with animation
+            const backupCard = buttonElement.closest('[data-chat-id]');
+            if (backupCard) {
+                backupCard.style.transition = 'opacity 0.3s, transform 0.3s';
+                backupCard.style.opacity = '0';
+                backupCard.style.transform = 'translateX(-20px)';
+                setTimeout(() => {
+                    backupCard.remove();
+                    // Check if list is empty
+                    if (backupListContainer && backupListContainer.children.length === 0) {
+                        backupListContainer.innerHTML = '<div class="text-center text-gray-500 py-8">No backups found. Add a chat to start backing up.</div>';
+                    }
+                }, 300);
+            }
+            
+            console.log(`[BACKUP] Deleted backup for: ${chatName}`);
+        } else {
+            // Show error
+            alert(`Failed to delete backup: ${data.error || 'Unknown error'}`);
+            buttonElement.innerHTML = originalHTML;
+            buttonElement.disabled = false;
+            buttonElement.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+    } catch (error) {
+        console.error('[BACKUP] Delete backup error:', error);
+        alert(`Failed to delete backup: ${error.message}`);
+        buttonElement.innerHTML = originalHTML;
+        buttonElement.disabled = false;
+        buttonElement.classList.remove('opacity-50', 'cursor-not-allowed');
     }
 }
 

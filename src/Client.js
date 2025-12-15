@@ -234,7 +234,29 @@ class Client extends EventEmitter {
                      * @type {ClientInfo}
                      */
                 this.info = new ClientInfo(this, await this.pupPage.evaluate(() => {
-                    return { ...window.Store.Conn.serialize(), wid: window.Store.User.getMaybeMeUser() };
+                    // Get current user with fallback methods
+                    // WhatsApp Web API changed: getMaybeMeUser -> getMaybeMePnUser (PN = Phone Number)
+                    let meUser = null;
+                    try {
+                        // Method 1: Try getMaybeMePnUser (new method name - current WhatsApp Web)
+                        if (window.Store.User && typeof window.Store.User.getMaybeMePnUser === 'function') {
+                            meUser = window.Store.User.getMaybeMePnUser();
+                        }
+                        // Method 2: Try getMaybeMeUser (old method name - legacy WhatsApp Web)
+                        if (!meUser && window.Store.User && typeof window.Store.User.getMaybeMeUser === 'function') {
+                            meUser = window.Store.User.getMaybeMeUser();
+                        }
+                        // Method 3: Try getMeContact
+                        if (!meUser && window.Store.ContactCollection && typeof window.Store.ContactCollection.getMeContact === 'function') {
+                            const meContact = window.Store.ContactCollection.getMeContact();
+                            if (meContact) {
+                                meUser = meContact.wid || meContact;
+                            }
+                        }
+                    } catch (e) {
+                        // Ignore errors, will use Conn.wid below
+                    }
+                    return { ...window.Store.Conn.serialize(), wid: meUser || window.Store.Conn.wid };
                 }));
 
                 this.interface = new InterfaceController(this);

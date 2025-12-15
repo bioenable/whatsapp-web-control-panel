@@ -10,7 +10,6 @@
     const leadsList = document.getElementById('leads-list');
     const leadsContainer = document.getElementById('leads-container');
     const leadsSearch = document.getElementById('leads-search');
-    const leadsFilter = document.getElementById('leads-filter');
     const leadsRefreshBtn = document.getElementById('leads-refresh-btn');
     const leadsAutoChatToggle = document.getElementById('leads-auto-chat-toggle');
     const leadsAutoChatConfigBtn = document.getElementById('leads-auto-chat-config-btn');
@@ -87,15 +86,6 @@
         if (domainFilter) {
             domainFilter.addEventListener('change', (e) => {
                 filterDomain = e.target.value;
-                applyFiltersAndSearch();
-            });
-        }
-        
-        // Keep old filter for Type if it exists
-        if (leadsFilter) {
-            leadsFilter.addEventListener('change', (e) => {
-                // This can be kept for backward compatibility or removed
-                // For now, we'll keep it but it won't affect the new filtering
                 applyFiltersAndSearch();
             });
         }
@@ -744,27 +734,6 @@
             }
         });
     };
-
-    // Filter leads based on search and filter criteria
-    function filterLeads() {
-        const searchTerm = leadsSearch ? leadsSearch.value.toLowerCase() : '';
-        const filterType = leadsFilter ? leadsFilter.value : 'all';
-
-        leadsFilteredData = leadsData.filter(lead => {
-            const matchesSearch = !searchTerm || 
-                lead.name.toLowerCase().includes(searchTerm) ||
-                lead.email.toLowerCase().includes(searchTerm) ||
-                lead.mobile.includes(searchTerm) ||
-                (lead.inquiry && lead.inquiry.toLowerCase().includes(searchTerm));
-
-            const matchesFilter = filterType === 'all' || lead.Type === filterType;
-
-            return matchesSearch && matchesFilter;
-        });
-
-        renderLeadsList();
-        updateLeadsCount();
-    }
 
     // Update leads count display
     function updateLeadsCount() {

@@ -718,6 +718,57 @@ function setupBackupRoutes(app, client, getReady, BACKUP_DIR, BACKUP_LIST_FILE, 
         }
     });
 
+    // Delete backup item and its backup file
+    app.delete('/api/backup/:chatId', (req, res) => {
+        try {
+            const { chatId } = req.params;
+            
+            // Read the backup list
+            const backupList = readJson(BACKUP_LIST_FILE, { backups: [] });
+            
+            // Find the backup entry
+            const backupIndex = backupList.backups.findIndex(b => b.chatId === chatId);
+            
+            if (backupIndex === -1) {
+                return res.status(404).json({ error: 'Backup not found' });
+            }
+            
+            // Remove from list
+            const removedBackup = backupList.backups.splice(backupIndex, 1)[0];
+            
+            // Save updated list
+            writeJson(BACKUP_LIST_FILE, backupList);
+            
+            // Delete the backup file if it exists
+            const backupFileName = `${chatId.replace(/[@.]/g, '_')}.json`;
+            const backupFilePath = path.join(BACKUP_DIR, backupFileName);
+            
+            let fileDeleted = false;
+            if (fs.existsSync(backupFilePath)) {
+                try {
+                    fs.unlinkSync(backupFilePath);
+                    fileDeleted = true;
+                    console.log(`[BACKUP] Deleted backup file: ${backupFilePath}`);
+                } catch (fileErr) {
+                    console.error(`[BACKUP] Failed to delete backup file: ${fileErr.message}`);
+                }
+            }
+            
+            console.log(`[BACKUP] Removed backup entry for: ${removedBackup.chatName} (${chatId})`);
+            
+            res.json({ 
+                success: true, 
+                message: 'Backup deleted successfully',
+                chatId: chatId,
+                chatName: removedBackup.chatName,
+                fileDeleted: fileDeleted
+            });
+        } catch (err) {
+            console.error('[BACKUP] Failed to delete backup:', err);
+            res.status(500).json({ error: 'Failed to delete backup', details: err.message });
+        }
+    });
+
     // Backup now - perform immediate backup
     app.post('/api/backup/:chatId/backup-now', async (req, res) => {
         try {

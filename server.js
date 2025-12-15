@@ -2,179 +2,40 @@ const express = require('express');
 const path = require('path');
 const bodyParser = require('body-parser');
 const cors = require('cors');
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+// Use local whatsapp-web.js source (with custom fixes) instead of npm package
+const Client = require('./src/Client.js');
+const LocalAuth = require('./src/authStrategies/LocalAuth.js');
+const { MessageMedia } = require('./src/structures');
 const multer = require('multer');
 const qrcode = require('qrcode-terminal');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const CloudflareClient = require('./cloudflare-client.js');
 // Account-specific path management
-const PRIVATE_DATA_DIR = path.join(__dirname, 'private-data');
-let currentAccountNumber = null;
-let accountPaths = null;
+const accountPathsModule = require('./src/utils/accountPaths');
+const { initializeJsonFiles, readJson, writeJson, checkDiskSpace, cleanupOldLogs, cleanupTempFiles } = require('./src/utils/fileManager');
+let accountPaths = null; // Keep for backward compatibility during transition
 
-// Function to get account-specific paths
-function getAccountPaths(phoneNumber) {
-    if (!phoneNumber) {
-        throw new Error('Phone number is required to get account paths');
-    }
-    
-    // Sanitize phone number for folder name (remove special characters)
-    const sanitizedNumber = phoneNumber.replace(/[^0-9]/g, '');
-    const accountDir = path.join(PRIVATE_DATA_DIR, sanitizedNumber);
-    const backupsDir = path.join(accountDir, 'backups');
-    const logsDir = path.join(accountDir, 'logs');
-    
-    return {
-        accountDir,
-        backupsDir,
-        logsDir,
-        templatesFile: path.join(accountDir, 'templates.json'),
-        bulkFile: path.join(accountDir, 'bulk_messages.json'),
-        sentMessagesFile: path.join(accountDir, 'sent_messages.json'),
-        detectedChannelsFile: path.join(accountDir, 'detected_channels.json'),
-        leadsFile: path.join(accountDir, 'leads.json'),
-        leadsConfigFile: path.join(accountDir, 'leads-config.json'),
-        cloudflareLogsFile: path.join(logsDir, 'cloudflare_logs.json'),
-        cloudflareMessagesFile: path.join(logsDir, 'cloudflare_messages.json'),
-        backupListFile: path.join(accountDir, 'backup_list.json'),
-        automationsFile: path.join(accountDir, 'automations.json')
-    };
-}
-
-// Function to initialize account directories and migrate files if needed
-function initializeAccountPaths(phoneNumber) {
-    if (!phoneNumber) {
-        console.error('[ACCOUNT] Cannot initialize paths: phone number not provided');
-        return false;
-    }
-    
-    const paths = getAccountPaths(phoneNumber);
-    currentAccountNumber = phoneNumber;
-    accountPaths = paths;
-    
-    // Create directories
-    try {
-        if (!fs.existsSync(PRIVATE_DATA_DIR)) {
-            fs.mkdirSync(PRIVATE_DATA_DIR, { recursive: true });
-            console.log(`[ACCOUNT] Created private-data directory`);
-        }
-        
-        if (!fs.existsSync(paths.accountDir)) {
-            fs.mkdirSync(paths.accountDir, { recursive: true });
-            console.log(`[ACCOUNT] Created account directory: ${paths.accountDir}`);
-        }
-        
-        if (!fs.existsSync(paths.backupsDir)) {
-            fs.mkdirSync(paths.backupsDir, { recursive: true });
-            console.log(`[ACCOUNT] Created backups directory: ${paths.backupsDir}`);
-        }
-        
-        if (!fs.existsSync(paths.logsDir)) {
-            fs.mkdirSync(paths.logsDir, { recursive: true });
-            console.log(`[ACCOUNT] Created logs directory: ${paths.logsDir}`);
-        }
-        
-        // Migrate existing files from root directory if this is the first account
-        migrateLegacyFiles(phoneNumber, paths);
-        
-        return true;
-    } catch (error) {
-        console.error(`[ACCOUNT] Error initializing account paths:`, error);
-        return false;
-    }
-}
-
-// Function to migrate legacy files from root to account-specific directory
-function migrateLegacyFiles(phoneNumber, accountPaths) {
-    const legacyFiles = [
-        { old: path.join(__dirname, 'templates.json'), new: accountPaths.templatesFile },
-        { old: path.join(__dirname, 'bulk_messages.json'), new: accountPaths.bulkFile },
-        { old: path.join(__dirname, 'sent_messages.json'), new: accountPaths.sentMessagesFile },
-        { old: path.join(__dirname, 'detected_channels.json'), new: accountPaths.detectedChannelsFile },
-        { old: path.join(__dirname, 'leads.json'), new: accountPaths.leadsFile },
-        { old: path.join(__dirname, 'leads-config.json'), new: accountPaths.leadsConfigFile },
-        { old: path.join(__dirname, 'backup_list.json'), new: accountPaths.backupListFile },
-        { old: path.join(__dirname, 'automations.json'), new: accountPaths.automationsFile }
-    ];
-    
-    // Migrate backup files
-    const legacyBackupDir = path.join(__dirname, 'backups');
-    if (fs.existsSync(legacyBackupDir)) {
-        try {
-            const backupFiles = fs.readdirSync(legacyBackupDir).filter(f => f.endsWith('.json'));
-            backupFiles.forEach(file => {
-                const oldPath = path.join(legacyBackupDir, file);
-                const newPath = path.join(accountPaths.backupsDir, file);
-                if (!fs.existsSync(newPath)) {
-                    fs.copyFileSync(oldPath, newPath);
-                    console.log(`[ACCOUNT] Migrated backup file: ${file}`);
-                }
-            });
-        } catch (error) {
-            console.error(`[ACCOUNT] Error migrating backup files:`, error);
-        }
-    }
-    
-    // Migrate automation log files
-    try {
-        const rootFiles = fs.readdirSync(__dirname).filter(f => 
-            f.startsWith('automation_log_') && f.endsWith('.json')
-        );
-        rootFiles.forEach(file => {
-            const oldPath = path.join(__dirname, file);
-            const newPath = path.join(accountPaths.logsDir, file);
-            if (!fs.existsSync(newPath)) {
-                fs.copyFileSync(oldPath, newPath);
-                console.log(`[ACCOUNT] Migrated log file: ${file}`);
-            }
-        });
-    } catch (error) {
-        console.error(`[ACCOUNT] Error migrating log files:`, error);
-    }
-    
-    // Migrate cloudflare log files
-    const legacyCloudflareFiles = [
-        { old: path.join(__dirname, 'cloudflare_logs.json'), new: accountPaths.cloudflareLogsFile },
-        { old: path.join(__dirname, 'cloudflare_messages.json'), new: accountPaths.cloudflareMessagesFile }
-    ];
-    
-    legacyCloudflareFiles.forEach(({ old, new: newPath }) => {
-        if (fs.existsSync(old) && !fs.existsSync(newPath)) {
-            try {
-                fs.copyFileSync(old, newPath);
-                console.log(`[ACCOUNT] Migrated file: ${path.basename(old)}`);
-            } catch (error) {
-                console.error(`[ACCOUNT] Error migrating ${path.basename(old)}:`, error);
-            }
-        }
-    });
-    
-    // Migrate other JSON files
-    legacyFiles.forEach(({ old, new: newPath }) => {
-        if (fs.existsSync(old) && !fs.existsSync(newPath)) {
-            try {
-                fs.copyFileSync(old, newPath);
-                console.log(`[ACCOUNT] Migrated file: ${path.basename(old)}`);
-            } catch (error) {
-                console.error(`[ACCOUNT] Error migrating ${path.basename(old)}:`, error);
-            }
-        }
-    });
-}
-
-// Legacy file paths (for backward compatibility during migration)
-const TEMPLATES_FILE = path.join(__dirname, 'templates.json');
-const BULK_FILE = path.join(__dirname, 'bulk_messages.json');
-const SENT_MESSAGES_FILE = path.join(__dirname, 'sent_messages.json');
-const DETECTED_CHANNELS_FILE = path.join(__dirname, 'detected_channels.json');
-const LEADS_FILE = path.join(__dirname, 'leads.json');
-const LEADS_CONFIG_FILE = path.join(__dirname, 'leads-config.json');
-const CLOUDFLARE_LOGS_FILE = path.join(__dirname, 'cloudflare_logs.json');
-const CLOUDFLARE_MESSAGES_FILE = path.join(__dirname, 'cloudflare_messages.json');
+// Legacy file paths - DEPRECATED (now use accountPaths from private-data folder)
+// These constants are kept only for reference - DO NOT use them for file operations
+const TEMPLATES_FILE = null; // DEPRECATED: Use accountPaths.templatesFile
+const BULK_FILE = null; // DEPRECATED: Use accountPaths.bulkFile
+const SENT_MESSAGES_FILE = null; // DEPRECATED: Use accountPaths.sentMessagesFile
+const DETECTED_CHANNELS_FILE = null; // DEPRECATED: Use accountPaths.detectedChannelsFile
+const LEADS_FILE = null; // DEPRECATED: Use accountPaths.leadsFile
+const LEADS_CONFIG_FILE = null; // DEPRECATED: Use accountPaths.leadsConfigFile
+const CLOUDFLARE_LOGS_FILE = null; // DEPRECATED: Use accountPaths.cloudflareLogsFile
+const CLOUDFLARE_MESSAGES_FILE = null; // DEPRECATED: Use accountPaths.cloudflareMessagesFile
 const BACKUP_DIR = path.join(__dirname, 'backups');
 const BACKUP_LIST_FILE = path.join(__dirname, 'backup_list.json');
 const { setupBackupRoutes } = require('./backup.js');
+const { setupTemplatesRoutes } = require('./src/routes/templates.js');
+const { setupLeadsRoutes } = require('./src/routes/leads.js');
+const { setupContactsRoutes } = require('./src/routes/contacts.js');
+const { setupAutomationRoutes } = require('./src/routes/automations.js');
+const { setupChannelsRoutes } = require('./src/routes/channels.js');
+const { setupBulkRoutes } = require('./src/routes/bulk.js');
+const { setupMediaRoutes } = require('./src/routes/media.js');
 const fetch = require('node-fetch'); // Add at the top with other requires
 const TEMPLATE_MEDIA_DIR = path.join(__dirname, 'public', 'message-templates');
 if (!fs.existsSync(TEMPLATE_MEDIA_DIR)) fs.mkdirSync(TEMPLATE_MEDIA_DIR, { recursive: true });
@@ -859,38 +720,31 @@ async function handleFreshDataRequest(channelId, requestId) {
     }
 }
 
-// Ensure contact exists before sending message
+// Ensure contact exists before sending message (fast, non-blocking, no verification)
 async function ensureContactExists(chatId, contactName) {
   if (!client || !ready) {
-    console.log('[CONTACT-CHECK] WhatsApp client not ready, skipping contact check');
-    return;
+    return; // Silently skip if not ready
   }
 
   try {
-    // Check if contact already exists
-    const existingContact = await client.getContactById(chatId);
-    
-    if (existingContact) {
-      console.log(`[CONTACT-CHECK] Contact already exists: ${contactName} (${chatId})`);
-      return;
-    }
-    
-    // Contact doesn't exist, create it
-    console.log(`[CONTACT-CHECK] Contact not found, creating: ${contactName} (${chatId})`);
-    
     // Extract phone number from chatId (remove @c.us suffix)
     const phoneNumber = chatId.replace('@c.us', '');
     
     // Create contact using WhatsApp's contact creation method
+    // Note: WhatsApp Web.js has limitations - names may not persist, only numbers sync
     // v1.34.2+ fix: firstName must never be empty, use number as fallback if needed
     const firstName = contactName && contactName.trim() ? contactName.trim() : phoneNumber;
-    await client.saveOrEditAddressbookContact(phoneNumber, firstName, '', true); // syncToAddressbook = true (as per wwebjs docs)
     
-    console.log(`[CONTACT-CHECK] Successfully created contact: ${contactName} (${chatId})`);
+    // Attempt to add contact (non-blocking, ignore errors)
+    // Don't verify - WhatsApp Web.js contact addition is unreliable
+    await client.saveOrEditAddressbookContact(phoneNumber, firstName, '', true)
+      .catch(() => {
+        // Silently ignore errors - WhatsApp Web.js contact addition has known limitations
+      });
     
   } catch (error) {
-    console.error(`[CONTACT-CHECK] Error ensuring contact exists for ${chatId}:`, error.message);
-    // Don't throw error - continue with message sending even if contact creation fails
+    // Silently ignore all errors - continue with message sending
+    // WhatsApp Web.js contact addition is unreliable, so we don't block on it
   }
 }
 
@@ -1020,142 +874,66 @@ async function processQueuedMessages() {
   }
 }
 
-// Initialize required JSON files with proper structure (account-specific)
-function initializeJsonFiles() {
-    if (!accountPaths) {
-        console.log('[INIT] Skipping JSON file initialization: account paths not initialized yet');
-        return;
-    }
-    
-    console.log('[INIT] Checking and initializing required JSON files...');
-    
-    const filesToInitialize = [
-        {
-            path: accountPaths.templatesFile,
-            defaultContent: []
-        },
-        {
-            path: accountPaths.bulkFile,
-            defaultContent: []
-        },
-        {
-            path: accountPaths.sentMessagesFile,
-            defaultContent: []
-        },
-        {
-            path: accountPaths.automationsFile,
-            defaultContent: []
-        },
-        {
-            path: accountPaths.detectedChannelsFile,
-            defaultContent: []
-        },
-        {
-            path: accountPaths.leadsFile,
-            defaultContent: { leads: [] }
-        },
-        {
-            path: accountPaths.leadsConfigFile,
-            defaultContent: {
-                enabled: false,
-                systemPrompt: '',
-                includeJsonContext: true,
-                autoReply: false,
-                autoReplyPrompt: ''
-            }
-        },
-        {
-            path: accountPaths.cloudflareLogsFile,
-            defaultContent: []
-        },
-        {
-            path: accountPaths.cloudflareMessagesFile,
-            defaultContent: []
-        },
-        {
-            path: accountPaths.backupListFile,
-            defaultContent: { backups: [] }
-        }
-    ];
-    
-    filesToInitialize.forEach(file => {
-        try {
-            if (!fs.existsSync(file.path)) {
-                // Ensure directory exists
-                const dir = path.dirname(file.path);
-                if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
-                }
-                fs.writeFileSync(file.path, JSON.stringify(file.defaultContent, null, 2));
-                console.log(`[INIT] Created: ${path.basename(file.path)}`);
-            } else {
-                console.log(`[INIT] File exists: ${path.basename(file.path)}`);
-            }
-        } catch (error) {
-            console.error(`[INIT] Error initializing ${path.basename(file.path)}:`, error.message);
-        }
-    });
-    
-    console.log('[INIT] JSON files initialization completed');
-}
+// initializeJsonFiles is now imported from fileManager module
 const genAI = new GoogleGenAI({});
 const groundingTool = { googleSearch: {} };
-const genAIConfig = { tools: [groundingTool], maxOutputTokens: 512 };
+// INCREASED maxOutputTokens from 512 to 2048 for full message content
+const genAIConfig = { tools: [groundingTool], maxOutputTokens: 2048 };
 
 /**
  * Step 2: Parse the response from step 1 into structured JSON format
  * Uses gemini-2.5-flash-lite model without tools to reduce cost
  */
 async function parseResponseToJson(step1Response) {
-  const jsonSchema = {
-    type: 'object',
-    properties: {
-      message: {
-        type: 'string',
-        description: 'The clean message text to send to WhatsApp, without any commentary, notes, or explanations'
-      },
-      hasNewMessage: {
-        type: 'boolean',
-        description: 'true if there is a unique new message to send, false if no new content or duplicate'
-      },
-      notes: {
-        type: 'string',
-        description: 'Optional internal notes or commentary (not to be sent)'
-      }
-    },
-    required: ['message', 'hasNewMessage']
-  };
+  const parsePrompt = `You are extracting the FINAL WhatsApp message from an AI response.
 
-  const sampleJson = {
-    message: "Hello! This is a sample message that will be sent to WhatsApp.",
-    hasNewMessage: true,
-    notes: "Optional notes about the message generation"
-  };
-
-  const parsePrompt = `You are a JSON parser. Your task is to analyze the following AI-generated response and extract/format it into a structured JSON object.
-
-AI Response to parse:
+AI Response:
+---
 ${step1Response}
+---
 
-JSON Schema:
-${JSON.stringify(jsonSchema, null, 2)}
+TASK: Determine if there is a VALID message to send, and extract it if so.
 
-Example JSON format:
-${JSON.stringify(sampleJson, null, 2)}
+SET hasNewMessage = FALSE if the response contains ANY of these:
+- The exact text "NO_NEW_CONTENT" (this is a special signal meaning no news found)
+- "no new content found" or similar phrases
+- "all content has been covered" or similar
+- Only a list of previously sent titles without new news
+- Commentary about lack of new information
+- Error messages or system responses
+- Internal thinking without a final message
+- Meta-commentary like "I checked all sources..."
+- Any text that is NOT a proper subscriber-facing message
 
-Instructions:
-1. Extract the main message content that should be sent to WhatsApp and put it in the "message" field
-2. Determine if there is a unique new message to send (hasNewMessage: true) or if it's a duplicate/no new content (hasNewMessage: false)
-3. Put any commentary, explanations, or notes in the "notes" field (not in the message field)
-4. The "message" field must contain ONLY the clean text to be sent, with no commentary or explanations
-5. Return ONLY a valid JSON object matching the schema above, no other text
+SET hasNewMessage = TRUE only if there is a CLEAR, POLISHED message with:
+- An emoji-decorated title
+- Substantive news/update body text (not just a list of old titles)
+- A call-to-action URL at the end
+- Content that is clearly meant for subscribers (not admin/system notes)
 
-IMPORTANT: Respond with ONLY the JSON object, no markdown, no code blocks, just the raw JSON.`;
+EXTRACT the message ONLY if hasNewMessage = TRUE:
+- The FINAL formatted message with emoji title, body text, and URL
+- Usually appears at the END of the response
+- Starts with emojis and a title
+- Ends with "For more updates visit https://..."
+
+Return JSON:
+{
+  "message": "The clean message to send (empty string if hasNewMessage is false)",
+  "hasNewMessage": true/false,
+  "notes": "Reason for decision (e.g., 'No new content found' or 'Valid news message extracted')"
+}
+
+CRITICAL: 
+- When in doubt, set hasNewMessage = FALSE (better to skip than send garbage)
+- The "message" field should be EMPTY ("") if hasNewMessage is false
+Return ONLY the JSON object.`;
 
   try {
     const config = {
       responseMimeType: 'application/json',
-      maxOutputTokens: 512
+      // INCREASED maxOutputTokens from 512 to 2048 to preserve full message content
+      maxOutputTokens: 2048
     };
 
     const response = await genAI.models.generateContent({
@@ -1176,9 +954,11 @@ IMPORTANT: Respond with ONLY the JSON object, no markdown, no code blocks, just 
     }
 
     const parsed = JSON.parse(jsonText);
+    // Only send if hasNewMessage is explicitly true AND message is not empty
+    const hasValidMessage = parsed.hasNewMessage === true && parsed.message && parsed.message.trim().length > 50;
     return {
-      message: parsed.message || step1Response,
-      hasNewMessage: parsed.hasNewMessage !== false, // Default to true if not specified
+      message: hasValidMessage ? parsed.message : '',
+      hasNewMessage: hasValidMessage,
       notes: parsed.notes || ''
     };
   } catch (err) {
@@ -1228,12 +1008,12 @@ async function callGenAI({ systemPrompt, autoReplyPrompt, chatHistory, userMessa
         console.log('[GenAI] Step 2 succeeded: JSON parsed successfully');
         return parsedResult;
       } else {
-        // Step 2 failed, fall back to step 1 response
-        console.log('[GenAI] Step 2 failed, falling back to step 1 response');
+        // Step 2 failed - default to NOT sending (safer than sending garbage)
+        console.log('[GenAI] Step 2 failed, defaulting to hasNewMessage: false for safety');
         return {
-          message: responseText,
-          hasNewMessage: true,
-          notes: 'Step 2 JSON parsing failed, using raw response from step 1'
+          message: '',
+          hasNewMessage: false,
+          notes: 'Step 2 JSON parsing failed - skipping message for safety'
         };
       }
     }
@@ -1360,130 +1140,7 @@ function writeAutomations(data) {
   fs.writeFileSync(accountPaths.automationsFile, JSON.stringify(data, null, 2));
 }
 
-function readJson(file, fallback = []) {
-    try {
-        if (!fs.existsSync(file)) {
-            // Create file with fallback content if it doesn't exist
-            fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
-            console.log(`[INIT] Auto-created missing file: ${path.basename(file)}`);
-            return fallback;
-        }
-        return JSON.parse(fs.readFileSync(file, 'utf8'));
-    } catch (e) {
-        console.error(`[ERROR] Failed to read ${path.basename(file)}:`, e.message);
-        // Try to create file with fallback content
-        try {
-            fs.writeFileSync(file, JSON.stringify(fallback, null, 2));
-            console.log(`[INIT] Recreated corrupted file: ${path.basename(file)}`);
-        } catch (writeError) {
-            console.error(`[ERROR] Failed to recreate ${path.basename(file)}:`, writeError.message);
-        }
-        return fallback;
-    }
-}
-function writeJson(file, data) {
-    try {
-        // Ensure directory exists
-        const dir = path.dirname(file);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(file, JSON.stringify(data, null, 2));
-    } catch (error) {
-        console.error(`[ERROR] Failed to write ${path.basename(file)}:`, error.message);
-        
-        // Handle disk space errors gracefully
-        if (error.code === 'ENOSPC') {
-            console.error(`[ERROR] Disk space full! Cannot write ${path.basename(file)}`);
-            console.error(`[ERROR] Please free up disk space to continue normal operation`);
-            
-            // Don't throw error for disk space issues - just log and continue
-            // This prevents the app from crashing
-            return false;
-        }
-        
-        // For other errors, still throw to maintain existing behavior
-        throw error;
-    }
-    return true;
-}
-
-// Check disk space and cleanup if needed
-function checkDiskSpace() {
-    try {
-        const stats = fs.statSync(__dirname);
-        const freeSpace = require('child_process').execSync('df -h . | tail -1 | awk \'{print $4}\'').toString().trim();
-        console.log(`[DISK] Free space: ${freeSpace}`);
-        
-        // If free space is less than 1GB, trigger cleanup
-        if (freeSpace.includes('G') && parseFloat(freeSpace) < 1) {
-            console.log(`[DISK] Low disk space detected, cleaning up old logs and temp files...`);
-            cleanupOldLogs();
-            cleanupTempFiles();
-        }
-    } catch (error) {
-        console.error(`[ERROR] Failed to check disk space:`, error.message);
-    }
-}
-
-// Clean up old log files to free disk space
-function cleanupOldLogs() {
-    if (!accountPaths) return; // Skip if account not initialized
-    
-    try {
-        const logDir = accountPaths.logsDir;
-        const files = fs.readdirSync(logDir);
-        const logFiles = files.filter(file => 
-            file.startsWith('automation_log_') && file.endsWith('.json')
-        );
-        
-        // Sort by modification time (oldest first)
-        logFiles.sort((a, b) => {
-            const statA = fs.statSync(path.join(logDir, a));
-            const statB = fs.statSync(path.join(logDir, b));
-            return statA.mtime.getTime() - statB.mtime.getTime();
-        });
-        
-        // Keep only the 10 most recent log files
-        const filesToDelete = logFiles.slice(0, -10);
-        
-        filesToDelete.forEach(file => {
-            try {
-                fs.unlinkSync(path.join(logDir, file));
-                console.log(`[CLEANUP] Deleted old log file: ${file}`);
-            } catch (error) {
-                console.error(`[ERROR] Failed to delete ${file}:`, error.message);
-            }
-        });
-        
-        console.log(`[CLEANUP] Cleaned up ${filesToDelete.length} old log files`);
-    } catch (error) {
-        console.error(`[ERROR] Failed to cleanup old logs:`, error.message);
-    }
-}
-
-// Clean up old temporary files
-function cleanupTempFiles() {
-    try {
-        const tempDir = path.join(__dirname, 'temp');
-        if (!fs.existsSync(tempDir)) return;
-        
-        const files = fs.readdirSync(tempDir);
-        const now = Date.now();
-        const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-        
-        files.forEach(file => {
-            const filePath = path.join(tempDir, file);
-            const stats = fs.statSync(filePath);
-            if (now - stats.mtime.getTime() > maxAge) {
-                fs.unlinkSync(filePath);
-                console.log(`[CLEANUP] Removed old temp file: ${file}`);
-            }
-        });
-    } catch (err) {
-        console.error('[CLEANUP] Error cleaning temp files:', err);
-    }
-}
+// readJson, writeJson, checkDiskSpace, cleanupOldLogs, cleanupTempFiles are now imported from fileManager module
 
 // Configure multer for different upload types
 const upload = multer({
@@ -1679,7 +1336,9 @@ client.on('ready', async () => {
         
         // Initialize account-specific paths
         console.log(`[ACCOUNT] Initializing paths for account: ${phoneNumber}`);
-        if (initializeAccountPaths(phoneNumber)) {
+        const initializedPaths = accountPathsModule.initializeAccountPaths(phoneNumber);
+        if (initializedPaths) {
+            accountPaths = initializedPaths; // Sync local variable
             console.log(`[ACCOUNT] Account paths initialized successfully`);
             // Initialize JSON files for this account
             initializeJsonFiles();
@@ -1859,7 +1518,8 @@ async function handleLeadsAutoReply(msg) {
         const mobileNumber = chatId.replace('@c.us', '');
         
         // Load leads data
-        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
+        if (!accountPaths || !accountPaths.leadsFile) return;
+        const leadsData = readJson(accountPaths.leadsFile, { leads: [] });
         if (!leadsData.leads || !Array.isArray(leadsData.leads)) return;
         
         // Find lead with auto chat enabled for this mobile number
@@ -1883,7 +1543,8 @@ async function handleLeadsAutoReply(msg) {
         console.log(`[LEADS AUTO-REPLY] Processing auto-reply for lead: ${lead.name} (${lead.mobile})`);
         
         // Load leads auto chat configuration
-        const config = readJson(accountPaths ? accountPaths.leadsConfigFile : LEADS_CONFIG_FILE, {
+        if (!accountPaths || !accountPaths.leadsConfigFile) return;
+        const config = readJson(accountPaths.leadsConfigFile, {
             enabled: false,
             systemPrompt: '',
             includeJsonContext: true,
@@ -1958,7 +1619,8 @@ async function handleLeadsAutoReply(msg) {
 // Log message to lead's auto chat logs
 async function logLeadAutoChatMessage(leadId, type, message, prompt = '') {
     try {
-        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
+        if (!accountPaths || !accountPaths.leadsFile) return;
+        const leadsData = readJson(accountPaths.leadsFile, { leads: [] });
         if (!leadsData.leads || !Array.isArray(leadsData.leads)) return;
         
         const leadIndex = leadsData.leads.findIndex(l => l.id === leadId);
@@ -1984,7 +1646,7 @@ async function logLeadAutoChatMessage(leadId, type, message, prompt = '') {
         leadsData.leads[leadIndex].last_updated = new Date().toISOString();
         
         // Save back to file
-        writeJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, leadsData);
+        writeJson(accountPaths.leadsFile, leadsData);
         
         console.log(`[LEADS AUTO-REPLY] Logged ${type} message for lead: ${leadIndex}`);
         
@@ -2055,7 +1717,8 @@ setInterval(() => {
 const BULK_SEND_DELAY_SEC = 1; // default delay between messages
 setInterval(async () => {
     if (!ready) return;
-    let records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
+    if (!accountPaths || !accountPaths.bulkFile) return;
+    let records = readJson(accountPaths.bulkFile, []);
     let changed = false;
     const now = new Date();
     for (let i = 0; i < records.length; i++) {
@@ -2090,7 +1753,7 @@ setInterval(async () => {
                     records[i].sent_datetime = new Date().toISOString();
                     records[i].error = `Failed to verify group access: ${groupErr.message}`;
                     changed = true;
-                    writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
+                    writeJson(accountPaths.bulkFile, records);
                     continue; // Skip to next message
                 }
             } else {
@@ -2189,15 +1852,17 @@ setInterval(async () => {
                     records[i].sent_datetime = new Date().toISOString();
                     records[i].error = `Failed to add number to contacts before sending bulk message: ${addErr.message}`;
                     changed = true;
-                    writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
+                    writeJson(accountPaths.bulkFile, records);
                     continue; // Skip to next message
                 }
                 }
             }
             
             // Use retry mechanism for sending messages
+            console.log(`[BULK-SCHEDULER] Attempting to send message to ${chatId} (${r.number})`);
             await retryOperation(async () => {
                 if (r.media) {
+                    console.log(`[BULK-SCHEDULER] Processing media for ${chatId}: ${r.media}`);
                     let media;
                     if (r.media.startsWith('http')) {
                         const fetch = require('node-fetch');
@@ -2218,7 +1883,7 @@ setInterval(async () => {
                         }
                         
                         if (!fs.existsSync(absPath)) {
-                            console.error(`Media file not found: ${absPath} (original path: ${r.media})`);
+                            console.error(`[BULK-SCHEDULER] Media file not found: ${absPath} (original path: ${r.media})`);
                             throw new Error(`Media file not found: ${r.media}`);
                         }
                         
@@ -2226,16 +1891,20 @@ setInterval(async () => {
                         const mime = require('mime-types').lookup(absPath) || 'application/octet-stream';
                         media = new MessageMedia(mime, buf.toString('base64'), path.basename(absPath));
                     }
-                    await client.sendMessage(chatId, media, { caption: r.message });
+                    console.log(`[BULK-SCHEDULER] Calling client.sendMessage with media for ${chatId}...`);
+                    const result = await client.sendMessage(chatId, media, { caption: r.message });
+                    console.log(`[BULK-SCHEDULER] client.sendMessage result for ${chatId}:`, result ? 'success' : 'null', result?.id?._serialized || 'no id');
                 } else {
-                    await client.sendMessage(chatId, r.message);
+                    console.log(`[BULK-SCHEDULER] Calling client.sendMessage with text for ${chatId}...`);
+                    const result = await client.sendMessage(chatId, r.message);
+                    console.log(`[BULK-SCHEDULER] client.sendMessage result for ${chatId}:`, result ? 'success' : 'null', result?.id?._serialized || 'no id');
                 }
             }, 3, 2000); // 3 retries with 2 second delay
             
             records[i].status = 'sent';
             records[i].sent_datetime = new Date().toISOString();
             changed = true;
-            writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
+            writeJson(accountPaths.bulkFile, records);
             await new Promise(res => setTimeout(res, BULK_SEND_DELAY_SEC * 1000));
         } catch (err) {
             console.error(`Bulk send error for ${r.number}:`, err.message);
@@ -2246,10 +1915,10 @@ setInterval(async () => {
             records[i].sent_datetime = new Date().toISOString();
             records[i].error = err.message; // Store error message for debugging
             changed = true;
-            writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
+            writeJson(accountPaths.bulkFile, records);
         }
     }
-    if (changed) writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
+    if (changed) writeJson(accountPaths.bulkFile, records);
 }, 30000);
 
 // --- Automation Scheduler ---
@@ -2449,7 +2118,7 @@ function appendSentMessageLog(entry) {
             logs.splice(1000);
         }
         
-        const writeSuccess = writeJson(accountPaths ? accountPaths.sentMessagesFile : SENT_MESSAGES_FILE, logs);
+        const writeSuccess = writeJson(accountPaths.sentMessagesFile, logs);
         if (!writeSuccess) {
             console.log(`[SENT] Failed to save sent message log due to disk space`);
         }
@@ -2462,24 +2131,42 @@ function appendSentMessageLog(entry) {
 // Utility to manage detected channels
 function addDetectedChannel(channelId, channelInfo = {}) {
     try {
-        let channels = readJson(accountPaths ? accountPaths.detectedChannelsFile : DETECTED_CHANNELS_FILE);
+        if (!accountPaths || !accountPaths.detectedChannelsFile) {
+            console.log('[CHANNEL] Cannot save channel - account paths not initialized');
+            return;
+        }
+        let channels = readJson(accountPaths.detectedChannelsFile, []);
         // Check if channel already exists
         const existingIndex = channels.findIndex(ch => ch.id === channelId);
         const now = new Date().toISOString();
         if (existingIndex !== -1) {
-            // Update existing channel
+            // Update existing channel - preserve important fields, update others
+            const existing = channels[existingIndex];
             channels[existingIndex] = {
-                ...channels[existingIndex],
+                ...existing,
                 ...channelInfo,
+                // Preserve firstSeen
+                firstSeen: existing.firstSeen || now,
+                // Update lastSeen
                 lastSeen: now,
-                messageCount: (channels[existingIndex].messageCount || 0) + 1
+                // Increment message count only if not a sync operation
+                messageCount: channelInfo.verified ? existing.messageCount || 0 : (existing.messageCount || 0) + 1,
+                // CRITICAL: If isReadOnly is explicitly provided, use it (for admin status)
+                isReadOnly: channelInfo.isReadOnly !== undefined ? channelInfo.isReadOnly : existing.isReadOnly,
+                // Update type based on isReadOnly if provided
+                type: channelInfo.isReadOnly !== undefined 
+                    ? (channelInfo.isReadOnly ? 'subscriber' : 'admin')
+                    : (channelInfo.type || existing.type || 'unknown')
             };
         } else {
             // Add new channel
             channels.push({
                 id: channelId,
                 name: channelInfo.name || channelId,
-                type: channelInfo.type || 'unknown',
+                type: channelInfo.isReadOnly !== undefined 
+                    ? (channelInfo.isReadOnly ? 'subscriber' : 'admin')
+                    : (channelInfo.type || 'unknown'),
+                isReadOnly: channelInfo.isReadOnly !== undefined ? channelInfo.isReadOnly : true, // Default to read-only
                 isNewsletter: channelId.endsWith('@newsletter'),
                 isBroadcast: channelId === 'status@broadcast',
                 firstSeen: now,
@@ -2493,9 +2180,10 @@ function addDetectedChannel(channelId, channelInfo = {}) {
             channels = channels.slice(-1000);
         }
         
-        const writeSuccess = writeJson(accountPaths ? accountPaths.detectedChannelsFile : DETECTED_CHANNELS_FILE, channels);
+        const writeSuccess = writeJson(accountPaths.detectedChannelsFile, channels);
         if (writeSuccess) {
-            console.log(`[CHANNEL] Added/Updated detected channel: ${channelId}`);
+            const isAdmin = channelInfo.isReadOnly === false;
+            console.log(`[CHANNEL] Added/Updated detected channel: ${channelId} (${isAdmin ? 'ADMIN' : 'subscriber'})`);
         } else {
             console.log(`[CHANNEL] Failed to save channel data due to disk space: ${channelId}`);
         }
@@ -2507,7 +2195,11 @@ function addDetectedChannel(channelId, channelInfo = {}) {
 
 // Get all detected channels
 function getDetectedChannels() {
-    return readJson(accountPaths ? accountPaths.detectedChannelsFile : DETECTED_CHANNELS_FILE);
+    if (!accountPaths || !accountPaths.detectedChannelsFile) {
+        console.log('[CHANNEL] Cannot get channels - account paths not initialized');
+        return [];
+    }
+    return readJson(accountPaths.detectedChannelsFile, []);
 }
 
 // Proactive channel discovery function
@@ -2515,23 +2207,75 @@ async function discoverChannels() {
     if (!ready) return;
     
     try {
-        console.log('[CHANNEL-DISCOVERY] Starting proactive channel discovery...');
+        console.log('[CHANNEL-DISCOVERY] Starting proactive channel discovery (with sync)...');
         
-        // Method 1: Get followed channels
+        // Method 1: Get followed channels from WhatsApp
         const chats = await client.getChats();
         const followedChannels = chats.filter(chat => chat.isChannel);
         
+        console.log(`[CHANNEL-DISCOVERY] Found ${followedChannels.length} channels in WhatsApp`);
+        
+        // SAFETY CHECK: If WhatsApp returns 0 channels, don't sync (likely a temporary issue)
+        if (followedChannels.length === 0) {
+            console.log('[CHANNEL-DISCOVERY] WARNING: WhatsApp returned 0 channels - skipping sync to preserve cache');
+            return;
+        }
+        
+        // Create a set of current WhatsApp channel IDs for sync
+        const waChannelIds = new Set(followedChannels.map(ch => ch.id._serialized));
+        
+        // Get existing cached channels
+        const existingChannels = getDetectedChannels();
+        console.log(`[CHANNEL-DISCOVERY] Existing cached channels: ${existingChannels.length}`);
+        
+        // Track admin vs readonly for logging
+        let adminCount = 0;
+        let readOnlyCount = 0;
+        
+        // Update/Add all WhatsApp channels to cache
         for (const channel of followedChannels) {
+            const isAdmin = !channel.isReadOnly;
+            if (isAdmin) adminCount++;
+            else readOnlyCount++;
+            
             addDetectedChannel(channel.id._serialized, {
                 name: channel.name,
-                type: 'followed',
+                type: isAdmin ? 'admin' : 'subscriber',
+                isReadOnly: channel.isReadOnly,  // CRITICAL: Save admin status
                 isNewsletter: channel.id._serialized.endsWith('@newsletter'),
                 isBroadcast: channel.id._serialized === 'status@broadcast',
-                lastSeen: new Date().toISOString()
+                lastSeen: new Date().toISOString(),
+                verified: true,
+                verifiedAt: new Date().toISOString()
             });
         }
         
-        // Method 2: Try to get newsletter collection
+        // SYNC: Remove channels that are no longer in WhatsApp
+        // But only if we have a significant number of channels from WhatsApp
+        // to avoid accidental data loss from temporary API failures
+        let removedCount = 0;
+        if (followedChannels.length >= 1 && existingChannels.length > 0) {
+            const channelsToKeep = existingChannels.filter(cachedChannel => {
+                if (waChannelIds.has(cachedChannel.id)) {
+                    return true; // Keep - still in WhatsApp
+                } else {
+                    console.log(`[CHANNEL-DISCOVERY] Removing unfollowed channel: ${cachedChannel.name || cachedChannel.id}`);
+                    removedCount++;
+                    return false; // Remove - no longer in WhatsApp
+                }
+            });
+            
+            // If we removed any channels, save the updated list
+            if (removedCount > 0 && accountPaths && accountPaths.detectedChannelsFile) {
+                // Re-read to get latest state (including newly added channels)
+                const updatedChannels = getDetectedChannels();
+                const finalChannels = updatedChannels.filter(ch => waChannelIds.has(ch.id));
+                writeJson(accountPaths.detectedChannelsFile, finalChannels);
+                console.log(`[CHANNEL-DISCOVERY] Removed ${removedCount} unfollowed channels from cache`);
+            }
+        }
+        
+        // Method 2: Try to get newsletter collection for additional metadata
         try {
             const newsletterChannels = await client.pupPage.evaluate(async () => {
                 try {
@@ -2549,20 +2293,25 @@ async function discoverChannels() {
                 }
             });
             
+            // Update newsletter channels with additional metadata
             for (const newsletter of newsletterChannels) {
-                addDetectedChannel(newsletter.id, {
-                    name: newsletter.name,
-                    type: 'newsletter',
-                    isNewsletter: true,
-                    isBroadcast: false,
-                    lastSeen: new Date().toISOString()
-                });
+                if (waChannelIds.has(newsletter.id)) {
+                    // Only update if it's a channel we're following
+                    addDetectedChannel(newsletter.id, {
+                        name: newsletter.name,
+                        description: newsletter.description,
+                        type: 'newsletter',
+                        isNewsletter: true,
+                        isBroadcast: false,
+                        lastSeen: new Date().toISOString()
+                    });
+                }
             }
         } catch (error) {
             console.log('[CHANNEL-DISCOVERY] Newsletter collection not accessible:', error.message);
         }
         
-        console.log(`[CHANNEL-DISCOVERY] Discovered ${followedChannels.length} followed channels`);
+        console.log(`[CHANNEL-DISCOVERY] Sync complete: ${followedChannels.length} channels (${adminCount} admin, ${readOnlyCount} read-only), removed ${removedCount} unfollowed`);
         
     } catch (error) {
         console.error('[CHANNEL-DISCOVERY] Error during channel discovery:', error);
@@ -2577,7 +2326,10 @@ function getDetectedChannelsByType(type) {
 
 // API to get sent messages log
 app.get('/api/sent-messages', (req, res) => {
-    res.json(readJson(accountPaths ? accountPaths.sentMessagesFile : SENT_MESSAGES_FILE));
+    if (!accountPaths || !accountPaths.sentMessagesFile) {
+        return res.json([]);
+    }
+    res.json(readJson(accountPaths.sentMessagesFile, []));
 });
 
 // API to add a sent message log (for resend, etc.)
@@ -2588,183 +2340,259 @@ app.post('/api/sent-messages', (req, res) => {
     res.json({ success: true });
 });
 
-// --- Automate Tab API ---
-// List all automations
-app.get('/api/automations', (req, res) => {
-  try {
-    const automations = readAutomations();
-    res.json(automations);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to read automations', details: err.message });
-  }
-});
-// Add new automation
-app.post('/api/automations', (req, res) => {
-  try {
-    const automations = readAutomations();
-    const { chatId, chatName, systemPrompt, schedule, status, automationType } = req.body;
-    
-    // Validation based on automation type
-    if (!chatId || !chatName || !systemPrompt) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-    
-    const isChannel = automationType === 'channel' || chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
-    
-    if (isChannel && !schedule) {
-      return res.status(400).json({ error: 'Schedule is required for channel automations' });
-    }
-    
-    const id = uuidv4();
-    const newAutomation = {
-      id, chatId, chatName, systemPrompt, schedule: schedule || null, status: status || 'active',
-      lastSent: null, nextScheduled: null, logFile: `automation_log_${id}.json`, automationType: isChannel ? 'channel' : 'chat'
-    };
-    automations.push(newAutomation);
-    writeAutomations(automations);
-    res.json(newAutomation);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to add automation', details: err.message });
-  }
-});
-// Edit automation
-app.put('/api/automations/:id', (req, res) => {
-  try {
-    const automations = readAutomations();
-    const idx = automations.findIndex(a => a.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Automation not found' });
-    const { chatId, chatName, systemPrompt, schedule, status, automationType } = req.body;
-    
-    // Validation based on automation type
-    const isChannel = automationType === 'channel' || chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
-    
-    if (isChannel && !schedule) {
-      return res.status(400).json({ error: 'Schedule is required for channel automations' });
-    }
-    
-    Object.assign(automations[idx], { 
-      chatId, chatName, systemPrompt, schedule: schedule || null, status,
-      automationType: isChannel ? 'channel' : 'chat'
-    });
-    writeAutomations(automations);
-    res.json(automations[idx]);
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to update automation', details: err.message });
-  }
-});
-// Delete automation
-app.delete('/api/automations/:id', (req, res) => {
-  try {
-    let automations = readAutomations();
-    const idx = automations.findIndex(a => a.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'Automation not found' });
-    const [removed] = automations.splice(idx, 1);
-    writeAutomations(automations);
-    // Optionally delete log file
-    if (removed.logFile && accountPaths) {
-      const logPath = path.join(accountPaths.logsDir, removed.logFile);
-      if (fs.existsSync(logPath)) {
-        fs.unlinkSync(logPath);
-      }
-    }
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ error: 'Failed to delete automation', details: err.message });
-  }
-});
-// Get automation log (paginated) - supports multiple log files
-app.get('/api/automations/:id/log', (req, res) => {
-  try {
-    const automations = readAutomations();
-    const automation = automations.find(a => a.id === req.params.id);
-    if (!automation) return res.status(404).json({ error: 'Automation not found' });
-    
-    // Get all log files for this automation (including rotated ones)
-    if (!accountPaths) {
-      return res.status(500).json({ error: 'Account paths not initialized' });
-    }
-    
-    const baseName = automation.logFile.replace('.json', '');
-    const logFiles = [];
-    
-    // Find all log files for this automation
-    const files = fs.readdirSync(accountPaths.logsDir);
-    files.forEach(file => {
-      if (file.startsWith(baseName) && file.endsWith('.json') && !file.includes('_corrupted_')) {
-        logFiles.push(file);
-      }
-    });
-    
-    // Sort log files: base file first, then numbered files in order
-    logFiles.sort((a, b) => {
-      if (a === automation.logFile) return -1;
-      if (b === automation.logFile) return 1;
-      const aNum = parseInt(a.match(/_(\d+)\.json$/)?.[1] || '0');
-      const bNum = parseInt(b.match(/_(\d+)\.json$/)?.[1] || '0');
-      return bNum - aNum; // Newest first
-    });
-    
-    // Read all log files and merge
-    let allLogs = [];
-    for (const logFile of logFiles) {
-      const logPath = path.join(accountPaths.logsDir, logFile);
-      if (fs.existsSync(logPath)) {
-        try {
-          const fileContent = fs.readFileSync(logPath, 'utf8');
-          if (fileContent.trim()) {
-            const logs = JSON.parse(fileContent);
-            if (Array.isArray(logs)) {
-              // Add source file info to each log entry
-              logs.forEach(log => {
-                if (!log.sourceFile) {
-                  log.sourceFile = logFile;
-                }
-              });
-              allLogs = allLogs.concat(logs);
+// Automations routes are now in src/routes/automations.js
+
+// Early Contacts API (works before WhatsApp is ready - reads from local JSON)
+const CONTACTS_FILE_DEFAULT = path.join(__dirname, 'contacts.json');
+
+function getContactsFilePathEarly() {
+    return accountPaths && accountPaths.contactsFile ? accountPaths.contactsFile : CONTACTS_FILE_DEFAULT;
+}
+
+// Get contacts from local JSON (fast, no WhatsApp required)
+app.get('/api/contacts', (req, res) => {
+    try {
+        const contactsFilePath = getContactsFilePathEarly();
+        let localData = { contacts: [], lastSync: null };
+        
+        if (fs.existsSync(contactsFilePath)) {
+            try {
+                localData = JSON.parse(fs.readFileSync(contactsFilePath, 'utf8'));
+            } catch (e) {
+                console.error('[CONTACTS] Error reading local contacts:', e);
             }
-          }
-        } catch (parseErr) {
-          console.error(`[AUTOMATION] Failed to parse log file ${logFile}:`, parseErr.message);
         }
-      }
-    }
-    
-    // Sort by timestamp (most recent first)
-    allLogs.sort((a, b) => {
-      const timeA = new Date(a.timestamp || a.time || 0).getTime();
-      const timeB = new Date(b.timestamp || b.time || 0).getTime();
-      return timeB - timeA;
-    });
-    
-    // Pagination
-    const page = parseInt(req.query.page) || 1;
-    const pageSize = parseInt(req.query.pageSize) || 20;
-    const start = (page - 1) * pageSize;
-    const end = start + pageSize;
-    
-    res.json({ 
-      logs: allLogs.slice(start, end), 
-      total: allLogs.length,
-      totalFiles: logFiles.length,
-      currentFile: automation.logFile
-    });
+        
+        const contacts = localData.contacts || [];
+        
+        // Extract unique tags
+        const allTags = new Set();
+        contacts.forEach(c => {
+            if (c.tags) {
+                c.tags.split(',').forEach(tag => {
+                    const trimmed = tag.trim();
+                    if (trimmed) allTags.add(trimmed);
+                });
+            }
+        });
+        
+        res.json({
+            contacts: contacts,
+            total: contacts.length,
+            lastSync: localData.lastSync,
+            uniqueTags: Array.from(allTags).sort()
+        });
   } catch (err) {
-    console.error('[AUTOMATION] Error fetching logs:', err);
-    res.status(500).json({ error: 'Failed to fetch log', details: err.message });
-  }
+        console.error('[CONTACTS] Failed to fetch contacts:', err);
+        res.status(500).json({ error: 'Failed to fetch contacts', details: err.message });
+    }
 });
-// Test GenAI integration (grounded)
-app.post('/api/automations/test-genai', async (req, res) => {
-  try {
-    const { systemPrompt, autoReplyPrompt, userMessage } = req.body;
-    if (!systemPrompt || !autoReplyPrompt || !userMessage) {
-      return res.status(400).json({ error: 'Missing required fields' });
-    }
-    const result = await callGenAI({ systemPrompt, autoReplyPrompt, chatHistory: '', userMessage });
-    if (!result) return res.status(500).json({ error: 'GenAI call failed' });
-    res.json({ result });
+
+// Get unique tags
+app.get('/api/contacts/tags', (req, res) => {
+    try {
+        const contactsFilePath = getContactsFilePathEarly();
+        let localData = { contacts: [], lastSync: null };
+        
+        if (fs.existsSync(contactsFilePath)) {
+            try {
+                localData = JSON.parse(fs.readFileSync(contactsFilePath, 'utf8'));
+            } catch (e) {
+                console.error('[CONTACTS] Error reading local contacts:', e);
+            }
+        }
+        
+        const allTags = new Set();
+        (localData.contacts || []).forEach(c => {
+            if (c.tags) {
+                c.tags.split(',').forEach(tag => {
+                    const trimmed = tag.trim();
+                    if (trimmed) allTags.add(trimmed);
+                });
+            }
+        });
+        
+        res.json({
+            tags: Array.from(allTags).sort(),
+            total: allTags.size
+        });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+        console.error('[CONTACTS] Failed to get tags:', err);
+        res.status(500).json({ error: 'Failed to get tags', details: err.message });
+    }
+});
+
+// Update tags for contacts
+app.post('/api/contacts/tags', (req, res) => {
+    try {
+        const { contactIds, tags, action } = req.body;
+        
+        if (!contactIds || !Array.isArray(contactIds) || contactIds.length === 0) {
+            return res.status(400).json({ error: 'Contact IDs are required' });
+        }
+        
+        if (tags === undefined) {
+            return res.status(400).json({ error: 'Tags are required' });
+        }
+        
+        const contactsFilePath = getContactsFilePathEarly();
+        let localData = { contacts: [], lastSync: null };
+        
+        if (fs.existsSync(contactsFilePath)) {
+            try {
+                localData = JSON.parse(fs.readFileSync(contactsFilePath, 'utf8'));
+            } catch (e) {
+                console.error('[CONTACTS] Error reading local contacts:', e);
+            }
+        }
+        
+        const contactIdSet = new Set(contactIds);
+        let updatedCount = 0;
+        
+        localData.contacts = (localData.contacts || []).map(contact => {
+            if (contactIdSet.has(contact.id)) {
+                if (action === 'add') {
+                    const existingTags = contact.tags ? contact.tags.split(',').map(t => t.trim()).filter(t => t) : [];
+                    const newTags = tags.split(',').map(t => t.trim()).filter(t => t);
+                    const combinedTags = [...new Set([...existingTags, ...newTags])];
+                    contact.tags = combinedTags.join(', ');
+                } else if (action === 'remove') {
+                    const existingTags = contact.tags ? contact.tags.split(',').map(t => t.trim()).filter(t => t) : [];
+                    const tagsToRemove = new Set(tags.split(',').map(t => t.trim().toLowerCase()));
+                    const filteredTags = existingTags.filter(t => !tagsToRemove.has(t.toLowerCase()));
+                    contact.tags = filteredTags.join(', ');
+                } else {
+                    contact.tags = tags;
+                }
+                contact.lastUpdated = new Date().toISOString();
+                updatedCount++;
+            }
+            return contact;
+        });
+        
+        // Write to file
+        fs.writeFileSync(contactsFilePath, JSON.stringify(localData, null, 2));
+        
+        // Get unique tags for response
+        const allTags = new Set();
+        localData.contacts.forEach(c => {
+            if (c.tags) {
+                c.tags.split(',').forEach(tag => {
+                    const trimmed = tag.trim();
+                    if (trimmed) allTags.add(trimmed);
+                });
+            }
+        });
+        
+        res.json({
+            success: true,
+            message: `Updated tags for ${updatedCount} contacts`,
+            updatedCount: updatedCount,
+            uniqueTags: Array.from(allTags).sort()
+        });
+    } catch (err) {
+        console.error('[CONTACTS] Failed to update tags:', err);
+        res.status(500).json({ error: 'Failed to update tags', details: err.message });
+    }
+});
+
+// Sync contacts from WhatsApp (requires WhatsApp to be ready)
+app.post('/api/contacts/sync', async (req, res) => {
+    if (!ready) {
+        return res.status(503).json({ error: 'WhatsApp client not ready' });
+    }
+    
+    try {
+        console.log('[CONTACTS-SYNC] Starting sync from WhatsApp...');
+        const waContacts = await client.getContacts();
+        console.log(`[CONTACTS-SYNC] Fetched ${waContacts.length} contacts from WhatsApp`);
+        
+        const contactsFilePath = getContactsFilePathEarly();
+        let localData = { contacts: [], lastSync: null };
+        
+        if (fs.existsSync(contactsFilePath)) {
+            try {
+                localData = JSON.parse(fs.readFileSync(contactsFilePath, 'utf8'));
+            } catch (e) {
+                console.error('[CONTACTS-SYNC] Error reading local contacts:', e);
+            }
+        }
+        
+        // Create map of existing local contacts to preserve tags
+        const localContactsMap = new Map();
+        (localData.contacts || []).forEach(c => {
+            localContactsMap.set(c.id, c);
+        });
+        
+        // Get IDs of all WhatsApp contacts
+        const waContactIds = new Set();
+        
+        // Process WhatsApp contacts
+        const syncedContacts = waContacts
+            .filter(contact => {
+                return contact.id && 
+                       contact.id.user && 
+                       contact.id._serialized && 
+                       !contact.id._serialized.includes('status@broadcast') &&
+                       !contact.id._serialized.includes('@g.us') &&
+                       !contact.id._serialized.includes('@newsletter');
+            })
+            .map(contact => {
+                const id = contact.id._serialized;
+                waContactIds.add(id);
+                
+                const existingLocal = localContactsMap.get(id);
+                
+                return {
+                    id: id,
+                    number: contact.id.user,
+                    name: contact.name || null,
+                    pushname: contact.pushname || null,
+                    shortName: contact.shortName || null,
+                    isMyContact: contact.isMyContact || false,
+                    isWAContact: contact.isWAContact || false,
+                    isBlocked: contact.isBlocked || false,
+                    isBusiness: contact.isBusiness || false,
+                    isEnterprise: contact.isEnterprise || false,
+                    verified: contact.isVerified || false,
+                    tags: existingLocal ? existingLocal.tags || '' : '',
+                    notes: existingLocal ? existingLocal.notes || '' : '',
+                    firstSeen: existingLocal ? existingLocal.firstSeen : new Date().toISOString(),
+                    lastUpdated: new Date().toISOString()
+                };
+            });
+        
+        // Count removed contacts
+        let removedCount = 0;
+        if (localData.contacts) {
+            localData.contacts.forEach(c => {
+                if (!waContactIds.has(c.id)) {
+                    removedCount++;
+                }
+            });
+        }
+        
+        const newLocalData = {
+            contacts: syncedContacts,
+            lastSync: new Date().toISOString(),
+            totalContacts: syncedContacts.length,
+            removedCount: removedCount
+        };
+        
+        fs.writeFileSync(contactsFilePath, JSON.stringify(newLocalData, null, 2));
+        
+        console.log(`[CONTACTS-SYNC] Sync complete. Total: ${syncedContacts.length}, Removed: ${removedCount}`);
+        
+        res.json({
+            success: true,
+            message: `Synced ${syncedContacts.length} contacts`,
+            totalContacts: syncedContacts.length,
+            removedCount: removedCount,
+            lastSync: newLocalData.lastSync
+        });
+  } catch (err) {
+        console.error('[CONTACTS-SYNC] Error syncing contacts:', err);
+        res.status(500).json({ error: 'Failed to sync contacts', details: err.message });
   }
 });
 
@@ -2861,21 +2689,31 @@ async function retryOperation(operation, maxRetries = 3, delay = 2000) {
     }
 }
 
-// Get all chats
+// Get all chats (optimized for speed)
 app.get('/api/chats', async (req, res) => {
     if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
     try {
-        const chats = await retryOperation(() => client.getChats());
-        res.json(chats.map(chat => ({
-            id: chat.id._serialized,
-            name: chat.name || chat.formattedTitle || chat.id.user,
-            isGroup: chat.isGroup,
-            unreadCount: chat.unreadCount,
-            timestamp: chat.timestamp || (chat.lastMessage ? chat.lastMessage.timestamp : 0) || 0
+        // Use Promise.race to add timeout (10 seconds max)
+        const chatsPromise = client.getChats();
+        const timeoutPromise = new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Chat loading timeout')), 10000)
+        );
+        
+        const chats = await Promise.race([chatsPromise, timeoutPromise]);
+        
+        // Map chats efficiently (don't await individual properties)
+        const chatsList = Array.isArray(chats) ? chats : Array.from(chats || []);
+        res.json(chatsList.map(chat => ({
+            id: chat.id?._serialized || chat.id,
+            name: chat.name || chat.formattedTitle || chat.id?.user || 'Unknown',
+            isGroup: chat.isGroup || false,
+            unreadCount: chat.unreadCount || 0,
+            timestamp: chat.timestamp || (chat.lastMessage?.timestamp) || 0
         })));
     } catch (err) {
-        console.error('Failed to fetch chats after retries:', err);
-        res.status(500).json({ error: 'Failed to fetch chats', details: err.message });
+        console.error('[CHATS] Failed to fetch chats:', err.message);
+        // Return empty array instead of error to allow UI to load
+        res.json([]);
     }
 });
 
@@ -2975,162 +2813,10 @@ app.get('/api/chats/:chatId/messages/:messageId/media', async (req, res) => {
     }
 });
 
-// Upload media file
-app.post('/api/upload-media', upload.single('media'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: 'No media file provided' });
-    }
-    
-    try {
-        // Validate file type
-        const allowedTypes = ['image/', 'video/', 'application/pdf'];
-        if (!allowedTypes.some(t => req.file.mimetype.startsWith(t))) {
-            return res.status(400).json({ error: 'Unsupported media type. Only images, videos, and PDFs are allowed.' });
-        }
-        
-        // Validate file size (100MB max)
-        if (req.file.size > 100 * 1024 * 1024) {
-            return res.status(400).json({ error: 'File too large. Maximum size is 100MB.' });
-        }
-        
-        // Generate a unique filename
-        const timestamp = Date.now();
-        const originalName = req.file.originalname;
-        const extension = originalName.split('.').pop();
-        const filename = `bulk-media-${timestamp}.${extension}`;
-        
-        // Ensure the message-templates directory exists
-        const messageTemplatesDir = path.join(__dirname, 'public', 'message-templates');
-        if (!fs.existsSync(messageTemplatesDir)) {
-            fs.mkdirSync(messageTemplatesDir, { recursive: true });
-        }
-        
-        // Move file to public directory
-        const publicPath = path.join(messageTemplatesDir, filename);
-        fs.renameSync(req.file.path, publicPath);
-        
-        // Return the public URL
-        const publicUrl = `/message-templates/${filename}`;
-        console.log(`[UPLOAD] Media uploaded successfully: ${filename} (${req.file.size} bytes)`);
-        res.json({ url: publicUrl, filename: filename });
-    } catch (err) {
-        console.error('Media upload error:', err);
-        
-        // Clean up temp file if it exists
-        if (req.file && req.file.path && fs.existsSync(req.file.path)) {
-            try {
-                fs.unlinkSync(req.file.path);
-            } catch (cleanupErr) {
-                console.error('Failed to cleanup temp file:', cleanupErr);
-            }
-        }
-        
-        res.status(500).json({ error: 'Failed to upload media: ' + err.message });
-    }
-});
+// Media upload route is now in src/routes/media.js
 
 // Get all contacts with pagination
-app.get('/api/contacts', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    
-    try {
-        const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 1000;
-        const search = req.query.search || '';
-        
-        console.log('[CONTACTS] Fetching contacts from WhatsApp...');
-        const contacts = await client.getContacts();
-        console.log(`[CONTACTS] Fetched ${contacts.length} contacts from WhatsApp`);
-        
-        let contactsData = contacts.map(contact => ({
-            id: contact.id._serialized,
-            number: contact.id.user,
-            name: contact.name || null,
-            pushname: contact.pushname || null,
-            status: contact.status || null,
-            avatar: contact.profilePicUrl || null,
-            verified: contact.isVerified || false,
-            businessProfile: contact.businessProfile ? {
-                description: contact.businessProfile.description || null,
-                website: contact.businessProfile.website || null,
-                email: contact.businessProfile.email || null,
-                category: contact.businessProfile.category || null,
-                subcategory: contact.businessProfile.subcategory || null
-            } : null
-        }));
-        
-        // Apply search filter if provided
-        if (search) {
-            const searchLower = search.toLowerCase();
-            contactsData = contactsData.filter(contact => {
-                const name = (contact.name || '').toLowerCase();
-                const number = (contact.number || '').toLowerCase();
-                const pushname = (contact.pushname || '').toLowerCase();
-                
-                return name.includes(searchLower) || 
-                       number.includes(searchLower) || 
-                       pushname.includes(searchLower);
-            });
-        }
-        
-        // Apply pagination
-        const startIndex = (page - 1) * limit;
-        const endIndex = startIndex + limit;
-        const paginatedContacts = contactsData.slice(startIndex, endIndex);
-        
-        res.json({ 
-            contacts: paginatedContacts,
-            total: contactsData.length,
-            page: page,
-            limit: limit,
-            totalPages: Math.ceil(contactsData.length / limit)
-        });
-    } catch (err) {
-        console.error('Failed to fetch contacts:', err);
-        res.status(500).json({ error: 'Failed to fetch contacts', details: err.message });
-    }
-});
-
-
-
-
-
-// Update contacts from WhatsApp
-app.post('/api/contacts/update', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    
-    try {
-        console.log('[CONTACTS] Updating contacts from WhatsApp...');
-        const contacts = await client.getContacts();
-        console.log(`[CONTACTS] Fetched ${contacts.length} contacts from WhatsApp`);
-        
-        const contactsData = contacts.map(contact => ({
-            id: contact.id._serialized,
-            number: contact.id.user,
-            name: contact.name || null,
-            pushname: contact.pushname || null,
-            status: contact.status || null,
-            avatar: contact.profilePicUrl || null,
-            verified: contact.isVerified || false,
-            businessProfile: contact.businessProfile ? {
-                description: contact.businessProfile.description || null,
-                website: contact.businessProfile.website || null,
-                email: contact.businessProfile.email || null,
-                category: contact.businessProfile.category || null,
-                subcategory: contact.businessProfile.subcategory || null
-            } : null
-        }));
-        
-        res.json({ 
-            success: true, 
-            message: `Successfully fetched ${contactsData.length} contacts from WhatsApp`,
-            contacts: contactsData
-        });
-    } catch (err) {
-        console.error('Failed to update contacts:', err);
-        res.status(500).json({ error: 'Failed to update contacts', details: err.message });
-    }
-});
+// Contacts routes are now in src/routes/contacts.js
 
 // Get group participants
 app.get('/api/chats/:id/participants', async (req, res) => {
@@ -3164,657 +2850,49 @@ app.get('/api/chats/:id/participants', async (req, res) => {
 });
 
 // --- Channels API ---
-// List all followed channels
-app.get('/api/channels', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    try {
-        const chats = await client.getChats();
-        const channels = chats.filter(chat => chat.isChannel).map(channel => ({
-            id: channel.id._serialized,
-            name: channel.name,
-            description: channel.description,
-            isReadOnly: channel.isReadOnly,
-            unreadCount: channel.unreadCount,
-            timestamp: channel.timestamp
-        }));
-        res.json(channels);
-    } catch (err) {
-        console.error('Failed to fetch channels:', err);
-        res.status(500).json({ error: 'Failed to fetch channels', details: err.message });
-    }
-});
-
-// Enhanced channel detection endpoint that combines multiple methods
-app.get('/api/channels/enhanced', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    try {
-        const { method = 'all' } = req.query;
-        let channels = [];
-        
-        switch (method) {
-            case 'followed':
-                // Get only followed channels using client.getChats()
-                const chats = await client.getChats();
-                channels = chats.filter(chat => chat.isChannel).map(channel => ({
-                    id: channel.id._serialized,
-                    name: channel.name,
-                    description: channel.description,
-                    isReadOnly: channel.isReadOnly,
-                    unreadCount: channel.unreadCount,
-                    timestamp: channel.timestamp,
-                    isMuted: channel.isMuted,
-                    muteExpiration: channel.muteExpiration,
-                    lastMessage: channel.lastMessage ? {
-                        id: channel.lastMessage.id._serialized,
-                        body: channel.lastMessage.body,
-                        timestamp: channel.lastMessage.timestamp,
-                        fromMe: channel.lastMessage.fromMe
-                    } : null,
-                    type: 'followed'
-                }));
-                break;
-                
-            case 'newsletter':
-                // Get newsletter channels using NewsletterCollection
-                const newsletterChannels = await client.pupPage.evaluate(async () => {
-                    try {
-                        const newsletterCollection = window.Store.NewsletterCollection;
-                        const newsletters = newsletterCollection.getModelsArray();
-                        return newsletters.map(newsletter => ({
-                            id: newsletter.id._serialized,
-                            name: newsletter.name,
-                            description: newsletter.description,
-                            isReadOnly: true,
-                            unreadCount: newsletter.unreadCount || 0,
-                            timestamp: newsletter.timestamp,
-                            isMuted: newsletter.isMuted || false,
-                            muteExpiration: newsletter.muteExpiration,
-                            lastMessage: newsletter.lastMessage ? {
-                                id: newsletter.lastMessage.id._serialized,
-                                body: newsletter.lastMessage.body,
-                                timestamp: newsletter.lastMessage.timestamp,
-                                fromMe: newsletter.lastMessage.fromMe
-                            } : null,
-                            type: 'newsletter'
-                        }));
-                    } catch (error) {
-                        console.error('Error fetching newsletter collection:', error);
-                        return [];
-                    }
-                });
-                channels = newsletterChannels;
-                break;
-                
-            case 'detected':
-                // Get channels from detected_channels.json
-                const detectedChannels = getDetectedChannels();
-                channels = detectedChannels.map(channel => ({
-                    id: channel.id,
-                    name: channel.name,
-                    description: '',
-                    isReadOnly: true,
-                    unreadCount: 0,
-                    timestamp: new Date(channel.lastSeen).getTime() / 1000,
-                    isMuted: false,
-                    muteExpiration: null,
-                    lastMessage: channel.lastMessage ? {
-                        id: 'detected',
-                        body: channel.lastMessage,
-                        timestamp: new Date(channel.lastSeen).getTime() / 1000,
-                        fromMe: false
-                    } : null,
-                    type: channel.type,
-                    isNewsletter: channel.isNewsletter,
-                    isBroadcast: channel.isBroadcast,
-                    messageCount: channel.messageCount,
-                    firstSeen: channel.firstSeen,
-                    lastSeen: channel.lastSeen
-                }));
-                break;
-                
-            default:
-                // Get all channels with all information
-                const allChats = await client.getChats();
-                const allChannels = allChats.filter(chat => chat.isChannel);
-                channels = allChannels.map(channel => ({
-                    id: channel.id._serialized,
-                    name: channel.name,
-                    description: channel.description,
-                    isReadOnly: channel.isReadOnly,
-                    unreadCount: channel.unreadCount,
-                    timestamp: channel.timestamp,
-                    isMuted: channel.isMuted,
-                    muteExpiration: channel.muteExpiration,
-                    lastMessage: channel.lastMessage ? {
-                        id: channel.lastMessage.id._serialized,
-                        body: channel.lastMessage.body,
-                        timestamp: channel.lastMessage.timestamp,
-                        fromMe: channel.lastMessage.fromMe
-                    } : null,
-                    type: channel.isReadOnly ? 'subscriber' : 'admin'
-                }));
-        }
-        
-        res.json({
-            channels,
-            total: channels.length,
-            method: method,
-            timestamp: new Date().toISOString()
-        });
-    } catch (err) {
-        console.error('Failed to fetch enhanced channels:', err);
-        res.status(500).json({ error: 'Failed to fetch enhanced channels', details: err.message });
-    }
-});
-
-// Get channels with detailed information and multiple fetch methods
-app.get('/api/channels/detailed', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    try {
-        const { method = 'all' } = req.query;
-        let channels = [];
-        
-        switch (method) {
-            case 'followed':
-                // Get only followed channels
-                const chats = await client.getChats();
-                channels = chats.filter(chat => chat.isChannel).map(channel => ({
-                    id: channel.id._serialized,
-                    name: channel.name,
-                    description: channel.description,
-                    isReadOnly: channel.isReadOnly,
-                    unreadCount: channel.unreadCount,
-                    timestamp: channel.timestamp,
-                    isMuted: channel.isMuted,
-                    muteExpiration: channel.muteExpiration,
-                    lastMessage: channel.lastMessage ? {
-                        id: channel.lastMessage.id._serialized,
-                        body: channel.lastMessage.body,
-                        timestamp: channel.lastMessage.timestamp,
-                        fromMe: channel.lastMessage.fromMe
-                    } : null,
-                    subscriberCount: null, // Will be fetched separately if needed
-                    type: 'followed'
-                }));
-                break;
-                
-            case 'subscribed':
-                // Get channels where user is a subscriber
-                const subscribedChats = await client.getChats();
-                const subscribedChannels = subscribedChats.filter(chat => chat.isChannel);
-                channels = subscribedChannels.map(channel => ({
-                    id: channel.id._serialized,
-                    name: channel.name,
-                    description: channel.description,
-                    isReadOnly: channel.isReadOnly,
-                    unreadCount: channel.unreadCount,
-                    timestamp: channel.timestamp,
-                    isMuted: channel.isMuted,
-                    muteExpiration: channel.muteExpiration,
-                    lastMessage: channel.lastMessage ? {
-                        id: channel.lastMessage.id._serialized,
-                        body: channel.lastMessage.body,
-                        timestamp: channel.lastMessage.timestamp,
-                        fromMe: channel.lastMessage.fromMe
-                    } : null,
-                    type: 'subscribed'
-                }));
-                break;
-                
-            case 'admin':
-                // Get channels where user is an admin
-                const adminChats = await client.getChats();
-                const adminChannels = adminChats.filter(chat => chat.isChannel && !chat.isReadOnly);
-                channels = adminChannels.map(channel => ({
-                    id: channel.id._serialized,
-                    name: channel.name,
-                    description: channel.description,
-                    isReadOnly: channel.isReadOnly,
-                    unreadCount: channel.unreadCount,
-                    timestamp: channel.timestamp,
-                    isMuted: channel.isMuted,
-                    muteExpiration: channel.muteExpiration,
-                    lastMessage: channel.lastMessage ? {
-                        id: channel.lastMessage.id._serialized,
-                        body: channel.lastMessage.body,
-                        timestamp: channel.lastMessage.timestamp,
-                        fromMe: channel.lastMessage.fromMe
-                    } : null,
-                    type: 'admin'
-                }));
-                break;
-                
-            default:
-                // Get all channels with all information
-                const allChats = await client.getChats();
-                const allChannels = allChats.filter(chat => chat.isChannel);
-                channels = allChannels.map(channel => ({
-                    id: channel.id._serialized,
-                    name: channel.name,
-                    description: channel.description,
-                    isReadOnly: channel.isReadOnly,
-                    unreadCount: channel.unreadCount,
-                    timestamp: channel.timestamp,
-                    isMuted: channel.isMuted,
-                    muteExpiration: channel.muteExpiration,
-                    lastMessage: channel.lastMessage ? {
-                        id: channel.lastMessage.id._serialized,
-                        body: channel.lastMessage.body,
-                        timestamp: channel.lastMessage.timestamp,
-                        fromMe: channel.lastMessage.fromMe
-                    } : null,
-                    type: channel.isReadOnly ? 'subscriber' : 'admin'
-                }));
-        }
-        
-        res.json({
-            channels,
-            total: channels.length,
-            method: method,
-            timestamp: new Date().toISOString()
-        });
-    } catch (err) {
-        console.error('Failed to fetch detailed channels:', err);
-        res.status(500).json({ error: 'Failed to fetch detailed channels', details: err.message });
-    }
-});
-
-// Verify channel admin status (get fresh data from WhatsApp)
-app.get('/api/channels/:channelId/verify', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    try {
-        const { channelId } = req.params;
-        const channel = await client.getChatById(channelId);
-        
-        if (!channel) {
-            return res.status(404).json({ error: 'Channel not found' });
-        }
-        
-        if (!channel.isChannel) {
-            return res.status(400).json({ error: 'Not a channel' });
-        }
-        
-        // Return the actual isReadOnly status from WhatsApp
-        res.json({
-            id: channel.id._serialized,
-            name: channel.name,
-            isReadOnly: channel.isReadOnly,
-            isChannel: channel.isChannel,
-            verified: true
-        });
-    } catch (err) {
-        console.error('Failed to verify channel status:', err);
-        res.status(500).json({ error: 'Failed to verify channel status', details: err.message });
-    }
-});
-
-// Get incoming channel messages (messages not from @c.us or @g.us)
-app.get('/api/incoming-channel-messages', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    try {
-        // Get all chats to find channel messages
-        const chats = await client.getChats();
-        const channelMessages = [];
-        
-        for (const chat of chats) {
-            if (chat.isChannel) {
-                try {
-                    // Get recent messages from this channel
-                    const messages = await chat.fetchMessages({ limit: 20 });
-                    
-                    // Filter for messages that are not from @c.us or @g.us, or specifically from @newsletter
-                    const filteredMessages = messages.filter(msg => {
-                        const from = msg.from || msg.author;
-                        return from && (!from.endsWith('@c.us') && !from.endsWith('@g.us') || from.endsWith('@newsletter'));
-                    });
-                    
-                    // Add to our collection
-                    channelMessages.push(...filteredMessages.map(msg => ({
-                        id: msg.id._serialized || msg.id,
-                        body: msg.body,
-                        type: msg.type,
-                        from: msg.from || msg.author,
-                        fromMe: msg.fromMe,
-                        to: msg.to,
-                        timestamp: msg.timestamp,
-                        hasMedia: msg.hasMedia,
-                        author: msg.author,
-                        mimetype: msg.mimetype,
-                        filename: msg.filename,
-                        size: msg._data?.size || null,
-                        chatId: chat.id._serialized,
-                        chatName: chat.name
-                    })));
-                } catch (err) {
-                    console.error(`Failed to fetch messages from channel ${chat.id._serialized}:`, err);
-                }
-            }
-        }
-        
-        // Sort by timestamp (newest first)
-        channelMessages.sort((a, b) => b.timestamp - a.timestamp);
-        
-        res.json(channelMessages);
-    } catch (err) {
-        console.error('Failed to fetch incoming channel messages:', err);
-        res.status(500).json({ error: 'Failed to fetch incoming channel messages', details: err.message });
-    }
-});
-
-
-// Get messages for a channel
-app.get('/api/channels/:id/messages', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    try {
-        const channel = await client.getChatById(req.params.id);
-        if (!channel.isChannel) return res.status(404).json({ error: 'Not a channel' });
-        const msgs = await channel.fetchMessages({ limit: 50 });
-        const result = msgs.map(msg => ({
-            id: msg.id._serialized || msg.id,
-            body: msg.body,
-            type: msg.type,
-            from: msg.from,
-            fromMe: msg.fromMe,
-            to: msg.to,
-            timestamp: msg.timestamp,
-            hasMedia: msg.hasMedia,
-            author: msg.author,
-            mimetype: msg.mimetype,
-            filename: msg.filename,
-            size: msg._data?.size || null
-        }));
-        res.json(result);
-    } catch (err) {
-        console.error('Failed to fetch channel messages:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-// Send message to a channel (if admin)
-app.post('/api/channels/:id/send', messageUpload.single('media'), async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    try {
-        const channel = await client.getChatById(req.params.id);
-        if (!channel.isChannel) return res.status(404).json({ error: 'Not a channel' });
-        if (channel.isReadOnly) return res.status(403).json({ error: 'Not a channel admin' });
-        const message = req.body?.message || '';
-        let sent;
-        if (req.file) {
-            const allowedTypes = ['image/', 'video/', 'application/pdf'];
-            if (!allowedTypes.some(t => req.file.mimetype.startsWith(t))) {
-                return res.status(400).json({ error: 'Unsupported media type' });
-            }
-            if (req.file.size > 100 * 1024 * 1024) {
-                return res.status(400).json({ error: 'File too large (max 100MB)' });
-            }
-            const media = new MessageMedia(
-                req.file.mimetype,
-                req.file.buffer.toString('base64'),
-                req.file.originalname
-            );
-            sent = await channel.sendMessage(media, { caption: message });
-        } else {
-            sent = await channel.sendMessage(message);
-        }
-        res.json({ success: true, id: sent.id._serialized });
-    } catch (err) {
-        console.error('Send channel message error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Send message to all channels or specific channel
-app.post('/api/channels/send', messageUpload.single('media'), async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    try {
-        const { channelId, message, sendToAll } = req.body;
-        const attachment = req.file;
-        
-        if (!message && !attachment) {
-            return res.status(400).json({ error: 'Message or attachment is required' });
-        }
-        
-        let channels = [];
-        
-        if (sendToAll === 'true') {
-            // Get all channels where user is admin
-            const allChats = await client.getChats();
-            channels = allChats.filter(chat => chat.isChannel && !chat.isReadOnly);
-        } else if (channelId) {
-            // Send to specific channel
-            const channel = await client.getChatById(channelId);
-            if (!channel.isChannel) {
-                return res.status(404).json({ error: 'Not a channel' });
-            }
-            if (channel.isReadOnly) {
-                return res.status(403).json({ error: 'Not a channel admin' });
-            }
-            channels = [channel];
-        } else {
-            return res.status(400).json({ error: 'Either channelId or sendToAll must be specified' });
-        }
-        
-        const results = [];
-        
-        for (const channel of channels) {
-            try {
-                let sent;
-                if (attachment) {
-                    const allowedTypes = ['image/', 'video/', 'application/pdf'];
-                    if (!allowedTypes.some(t => attachment.mimetype.startsWith(t))) {
-                        results.push({ channelId: channel.id._serialized, success: false, error: 'Unsupported media type' });
-                        continue;
-                    }
-                    if (attachment.size > 100 * 1024 * 1024) {
-                        results.push({ channelId: channel.id._serialized, success: false, error: 'File too large (max 100MB)' });
-                        continue;
-                    }
-                    const media = new MessageMedia(
-                        attachment.mimetype,
-                        attachment.buffer.toString('base64'),
-                        attachment.originalname
-                    );
-                    sent = await channel.sendMessage(media, { caption: message });
-                } else {
-                    sent = await channel.sendMessage(message);
-                }
-                
-                results.push({ 
-                    channelId: channel.id._serialized, 
-                    channelName: channel.name,
-                    success: true, 
-                    messageId: sent.id._serialized 
-                });
-                
-                // Log the sent message
-                appendSentMessageLog({
-                    to: channel.id._serialized,
-                    message: message,
-                    media: attachment ? attachment.originalname : null,
-                    status: 'sent',
-                    time: new Date().toISOString()
-                });
-                
-            } catch (err) {
-                console.error(`Failed to send message to channel ${channel.id._serialized}:`, err);
-                results.push({ 
-                    channelId: channel.id._serialized, 
-                    channelName: channel.name,
-                    success: false, 
-                    error: err.message 
-                });
-            }
-        }
-        
-        const successCount = results.filter(r => r.success).length;
-        const failureCount = results.length - successCount;
-        
-        res.json({ 
-            success: true, 
-            results,
-            summary: {
-                total: results.length,
-                successful: successCount,
-                failed: failureCount
-            }
-        });
-        
-    } catch (err) {
-        console.error('Send to channels error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
+// Channels routes are now in src/routes/channels.js
 
 // Get all templates
-app.get('/api/templates', (req, res) => {
-    res.json(readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE));
-});
-
-// Create new template
-app.post('/api/templates', templateUpload.single('media'), (req, res) => {
-    try {
-        const { name, text, removeMedia } = req.body;
-        if (!name || !text) {
-            return res.status(400).json({ error: 'Name and text are required' });
-        }
-        
-        const templates = readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE);
-        const template = {
-            id: require('crypto').randomUUID(),
-            name: name.trim(),
-            text: text.trim(),
-            media: null,
-            createdAt: new Date().toISOString()
-        };
-        
-        // Handle media upload
-        if (req.file) {
-            const mediaDir = path.join(__dirname, 'public', 'message-templates');
-            if (!fs.existsSync(mediaDir)) {
-                fs.mkdirSync(mediaDir, { recursive: true });
-            }
-            
-            const fileExt = path.extname(req.file.originalname);
-            const fileName = `${template.id}${fileExt}`;
-            const filePath = path.join(mediaDir, fileName);
-            
-            fs.writeFileSync(filePath, req.file.buffer);
-            template.media = `/message-templates/${fileName}`;
-        }
-        
-        templates.push(template);
-        writeJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE, templates);
-        res.json(template);
-    } catch (err) {
-        console.error('Create template error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Update existing template
-app.put('/api/templates/:id', templateUpload.single('media'), (req, res) => {
-    try {
-        const { id } = req.params;
-        const { name, text, removeMedia } = req.body;
-        if (!name || !text) {
-            return res.status(400).json({ error: 'Name and text are required' });
-        }
-        
-        const templates = readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE);
-        const templateIndex = templates.findIndex(t => t.id === id);
-        if (templateIndex === -1) {
-            return res.status(404).json({ error: 'Template not found' });
-        }
-        
-        const template = templates[templateIndex];
-        template.name = name.trim();
-        template.text = text.trim();
-        template.updatedAt = new Date().toISOString();
-        
-        // Handle media removal
-        if (removeMedia === 'true' && template.media) {
-            const oldMediaPath = path.join(__dirname, 'public', template.media);
-            if (fs.existsSync(oldMediaPath)) {
-                fs.unlinkSync(oldMediaPath);
-            }
-            template.media = null;
-        }
-        
-        // Handle new media upload
-        if (req.file) {
-            // Remove old media if exists
-            if (template.media) {
-                const oldMediaPath = path.join(__dirname, 'public', template.media);
-                if (fs.existsSync(oldMediaPath)) {
-                    fs.unlinkSync(oldMediaPath);
-                }
-            }
-            
-            const mediaDir = path.join(__dirname, 'public', 'message-templates');
-            if (!fs.existsSync(mediaDir)) {
-                fs.mkdirSync(mediaDir, { recursive: true });
-            }
-            
-            const fileExt = path.extname(req.file.originalname);
-            const fileName = `${template.id}${fileExt}`;
-            const filePath = path.join(mediaDir, fileName);
-            
-            fs.writeFileSync(filePath, req.file.buffer);
-            template.media = `/message-templates/${fileName}`;
-        }
-        
-        templates[templateIndex] = template;
-        writeJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE, templates);
-        res.json(template);
-    } catch (err) {
-        console.error('Update template error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Delete template
-app.delete('/api/templates/:id', (req, res) => {
-    try {
-        const { id } = req.params;
-        const templates = readJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE);
-        const templateIndex = templates.findIndex(t => t.id === id);
-        if (templateIndex === -1) {
-            return res.status(404).json({ error: 'Template not found' });
-        }
-        
-        const template = templates[templateIndex];
-        
-        // Remove media file if exists
-        if (template.media) {
-            const mediaPath = path.join(__dirname, 'public', template.media);
-            if (fs.existsSync(mediaPath)) {
-                fs.unlinkSync(mediaPath);
-            }
-        }
-        
-        templates.splice(templateIndex, 1);
-        writeJson(accountPaths ? accountPaths.templatesFile : TEMPLATES_FILE, templates);
-        res.json({ success: true });
-    } catch (err) {
-        console.error('Delete template error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
+// Templates routes are now in src/routes/templates.js
 
 // Get sent messages log
 app.get('/api/messages/log', (req, res) => {
-    res.json(readJson(accountPaths ? accountPaths.sentMessagesFile : SENT_MESSAGES_FILE));
+    if (!accountPaths || !accountPaths.sentMessagesFile) {
+        return res.json([]);
+    }
+    res.json(readJson(accountPaths.sentMessagesFile, []));
 });
 
 // Send message (with optional media)
 app.post('/api/messages/send', messageUpload.single('media'), async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
+    console.log('[MESSAGE-SEND] Request received:', {
+        hasFile: !!req.file,
+        number: req.body?.number,
+        hasMessage: !!req.body?.message,
+        mediaPath: req.body?.media_path,
+        mediaUrl: req.body?.media_url,
+        ready: ready
+    });
+    
+    if (!ready) {
+        console.error('[MESSAGE-SEND] WhatsApp client not ready');
+        return res.status(503).json({ error: 'WhatsApp not ready' });
+    }
+    
+    if (!client) {
+        console.error('[MESSAGE-SEND] WhatsApp client not initialized');
+        return res.status(503).json({ error: 'WhatsApp client not initialized' });
+    }
     
     const number = req.body?.number;
     const message = req.body?.message || '';
     const mediaPath = req.body?.media_path;
     const mediaUrl = req.body?.media_url;
     
-    if (!number) return res.status(400).json({ error: 'Missing number' });
+    if (!number) {
+        console.error('[MESSAGE-SEND] Missing number in request');
+        return res.status(400).json({ error: 'Missing number' });
+    }
     
     // Normalize WhatsApp ID
     const normalizedNumber = number.trim();
@@ -3822,19 +2900,29 @@ app.post('/api/messages/send', messageUpload.single('media'), async (req, res) =
         ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
         : normalizedNumber;
     
-    try {
+    console.log('[MESSAGE-SEND] Normalized chatId:', chatId, 'from number:', normalizedNumber);
+    
         let mediaInfo = null;
+    try {
         if (req.file) {
+            console.log('[MESSAGE-SEND] Processing file upload:', {
+                filename: req.file.originalname,
+                mimetype: req.file.mimetype,
+                size: req.file.size
+            });
+            
             // Validate file type/size
             const allowedTypes = ['image/', 'video/', 'application/pdf'];
             if (!allowedTypes.some(t => req.file.mimetype.startsWith(t))) {
+                console.error('[MESSAGE-SEND] Unsupported media type:', req.file.mimetype);
                 return res.status(400).json({ error: 'Unsupported media type' });
             }
             if (req.file.size > 100 * 1024 * 1024) {
+                console.error('[MESSAGE-SEND] File too large:', req.file.size);
                 return res.status(400).json({ error: 'File too large (max 100MB)' });
             }
             
-            console.log(`Sending media to ${chatId}: ${req.file.originalname} (${req.file.mimetype}, ${req.file.size} bytes)`);
+            console.log(`[MESSAGE-SEND] Creating MessageMedia for ${chatId}: ${req.file.originalname} (${req.file.mimetype}, ${req.file.size} bytes)`);
             
             const media = new MessageMedia(
                 req.file.mimetype,
@@ -3842,586 +2930,65 @@ app.post('/api/messages/send', messageUpload.single('media'), async (req, res) =
                 req.file.originalname
             );
             
-            await client.sendMessage(chatId, media, { caption: message });
+            console.log('[MESSAGE-SEND] Calling client.sendMessage with media...');
+            const result = await client.sendMessage(chatId, media, { caption: message });
+            console.log('[MESSAGE-SEND] client.sendMessage result:', result ? 'success' : 'null', result?.id?._serialized || 'no id');
+            
             mediaInfo = { filename: req.file.originalname, mimetype: req.file.mimetype };
-            console.log(`Sent media to ${chatId} (${req.file.originalname})`);
+            console.log(`[MESSAGE-SEND] Successfully sent media to ${chatId} (${req.file.originalname})`);
         } else if (mediaPath) {
+            console.log('[MESSAGE-SEND] Processing template media from path:', mediaPath);
+            
             // Send media from disk (template media)
             const absPath = path.join(__dirname, 'public', mediaPath.replace(/^\//, ''));
+            console.log('[MESSAGE-SEND] Resolved absolute path:', absPath);
+            
             if (!fs.existsSync(absPath)) {
+                console.error('[MESSAGE-SEND] Template media file not found:', absPath);
                 return res.status(400).json({ error: 'Template media file not found' });
             }
+            
             const buf = fs.readFileSync(absPath);
             const mime = require('mime-types').lookup(absPath) || 'application/octet-stream';
             const media = new MessageMedia(mime, buf.toString('base64'), path.basename(absPath));
-            await client.sendMessage(chatId, media, { caption: message });
+            
+            console.log('[MESSAGE-SEND] Calling client.sendMessage with template media...');
+            const result = await client.sendMessage(chatId, media, { caption: message });
+            console.log('[MESSAGE-SEND] client.sendMessage result:', result ? 'success' : 'null', result?.id?._serialized || 'no id');
+            
             mediaInfo = { filename: path.basename(absPath), mimetype: mime };
-            console.log(`[DEBUG] Sent template media to ${chatId} (${mediaPath})`);
+            console.log(`[MESSAGE-SEND] Successfully sent template media to ${chatId} (${mediaPath})`);
         } else if (mediaUrl) {
             // Handle mediaUrl if needed, or remove this block if not implemented
-            // Example: fetch and send media from URL, or just log
-            console.log(`[DEBUG] mediaUrl provided: ${mediaUrl}`);
+            console.log(`[MESSAGE-SEND] mediaUrl provided: ${mediaUrl}`);
             return res.status(400).json({ error: 'Sending media from URL is not implemented.' });
         } else {
-            await client.sendMessage(chatId, message);
+            console.log('[MESSAGE-SEND] Sending text message to', chatId, 'Message length:', message.length);
+            console.log('[MESSAGE-SEND] Calling client.sendMessage with text...');
+            const result = await client.sendMessage(chatId, message);
+            console.log('[MESSAGE-SEND] client.sendMessage result:', result ? 'success' : 'null', result?.id?._serialized || 'no id');
+            console.log(`[MESSAGE-SEND] Successfully sent text message to ${chatId}`);
         }
+        
+        console.log('[MESSAGE-SEND] Appending to sent messages log...');
         appendSentMessageLog({ to: chatId, message, media: mediaInfo, status: 'sent', time: new Date().toISOString() });
+        console.log('[MESSAGE-SEND] Request completed successfully');
         res.json({ success: true });
     } catch (err) {
-        console.error('Send message error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Get all bulk messages (paginated)
-app.get('/api/bulk', (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 100;
-    const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-    const start = (page - 1) * limit;
-    const end = start + limit;
-    res.json({
-        records: records.slice(start, end),
-        total: records.length
-    });
-});
-
-// Import bulk messages from CSV
-app.post('/api/bulk-import', csvUpload.single('csv'), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded' });
-    
-    try {
-        const csvData = req.file.buffer.toString('utf8');
-        const records = parse(csvData, { 
-            columns: true, 
-            skip_empty_lines: true,
-            trim: true
+        console.error('[MESSAGE-SEND] Error occurred:', err);
+        console.error('[MESSAGE-SEND] Error stack:', err.stack);
+        console.error('[MESSAGE-SEND] Error details:', {
+            message: err.message,
+            name: err.name,
+            chatId: chatId,
+            hasMessage: !!message,
+            hasMedia: !!mediaInfo
         });
-        
-        const errors = [];
-        const imported = [];
-        const importFilename = req.file.originalname;
-        const importDatetime = new Date().toISOString();
-        
-        for (let i = 0; i < records.length; i++) {
-            const record = records[i];
-            if (!record.number || !record.message) {
-                errors.push(`Row ${i + 2}: Missing number or message`);
-                continue;
-            }
-            
-            // Add metadata
-            record.import_filename = importFilename;
-            record.import_datetime = importDatetime;
-            record.unique_id = uuidv4();
-            record.status = 'pending';
-            
-            imported.push(record);
-        }
-        
-        // Append to bulk file
-        const existing = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        existing.push(...imported);
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, existing);
-        
-        res.json({ imported: imported.length, errors });
-    } catch (err) {
-        console.error('Bulk import error:', err);
-        res.status(500).json({ error: 'Failed to import CSV: ' + err.message });
+        res.status(500).json({ error: err.message, details: err.stack });
     }
 });
 
-// Get bulk imports with pagination and filtering
-app.get('/api/bulk-imports', (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 100;
-    const importFilename = req.query.import_filename;
-    
-    let records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-    
-    // Filter by import filename if specified
-    if (importFilename) {
-        records = records.filter(r => r.import_filename === importFilename);
-    }
-    
-    const start = (page - 1) * limit;
-    const end = start + limit;
-    
-    res.json({
-        records: records.slice(start, end),
-        total: records.length
-    });
-});
-
-// Test send a specific bulk record
-app.post('/api/bulk-test/:id', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    
-    const { action } = req.body;
-    const recordId = req.params.id;
-    
-    try {
-        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        const recordIndex = records.findIndex(r => r.unique_id === recordId);
-        
-        if (recordIndex === -1) {
-            return res.status(404).json({ error: 'Record not found' });
-        }
-        
-        const record = records[recordIndex];
-        
-        // Set send time based on action
-        if (action === 'now') {
-            record.send_datetime = new Date().toISOString();
-        } else if (action === 'schedule') {
-            const oneMinuteFromNow = new Date(Date.now() + 60000);
-            record.send_datetime = oneMinuteFromNow.toISOString();
-        }
-        
-        record.status = 'pending';
-        delete record.error; // Clear any previous error
-        
-        // Update the record
-        records[recordIndex] = record;
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
-        
-        res.json({ success: true });
-    } catch (err) {
-        console.error('Bulk test error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Retry failed bulk messages
-app.post('/api/bulk-retry/:filename', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    
-    try {
-        const { filename } = req.params;
-        const bulkMessagesPath = accountPaths ? accountPaths.bulkFile : path.join(__dirname, 'bulk_messages.json');
-        
-        if (!fs.existsSync(bulkMessagesPath)) {
-            return res.status(404).json({ error: 'Bulk messages file not found' });
-        }
-        
-        const bulkMessages = JSON.parse(fs.readFileSync(bulkMessagesPath, 'utf8'));
-        const importData = bulkMessages[filename];
-        
-        if (!importData) {
-            return res.status(404).json({ error: 'Import not found' });
-        }
-        
-        const failedMessages = importData.messages.filter(msg => msg.status === 'failed');
-        
-        if (failedMessages.length === 0) {
-            return res.json({ message: 'No failed messages to retry' });
-        }
-        
-        console.log(`Retrying ${failedMessages.length} failed messages for import: ${filename}`);
-        
-        let successCount = 0;
-        let failCount = 0;
-        
-        for (const message of failedMessages) {
-            try {
-                const normalizedNumber = message.to.trim();
-                let chatId = !normalizedNumber.endsWith('@c.us') && !normalizedNumber.endsWith('@g.us')
-                    ? normalizedNumber.replace(/[^0-9]/g, '') + '@c.us'
-                    : normalizedNumber;
-                
-                // Check if this is a group (ends with @g.us)
-                const isGroup = chatId.endsWith('@g.us');
-                
-                // For groups, verify we can access the group chat
-                if (isGroup) {
-                    try {
-                        const groupChat = await client.getChatById(chatId);
-                        if (!groupChat) {
-                            throw new Error(`Cannot access group ${chatId}. Account may not be a member.`);
-                        }
-                        console.log(`[BULK RETRY] Group verified: ${groupChat.name || chatId}`);
-                        // Skip contact addition for groups
-                    } catch (groupErr) {
-                        console.error(`[BULK RETRY] Group verification failed for ${chatId}:`, groupErr.message);
-                        message.status = 'failed';
-                        message.error = `Failed to verify group access: ${groupErr.message}`;
-                        failCount++;
-                        continue; // Skip to next message
-                    }
-                } else {
-                    // For individual contacts, check if contact exists and add if needed
-                    let contactExists = false;
-                    let existingContact = null;
-                    
-                    try {
-                        existingContact = await client.getContactById(chatId);
-                        if (existingContact && existingContact.isMyContact) {
-                            // Check if contact has proper name
-                            const hasProperName = existingContact.name && 
-                                                existingContact.name !== 'undefined' && 
-                                                existingContact.name !== undefined && 
-                                                existingContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
-                                                existingContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
-                            
-                            if (hasProperName) {
-                                console.log(`[BULK RETRY] Contact exists with proper name for ${normalizedNumber}: ${existingContact.name}`);
-                                contactExists = true;
-                            } else {
-                                console.log(`[BULK RETRY] Contact exists but needs name update for ${normalizedNumber}: ${existingContact.name}`);
-                            }
-                        } else {
-                            console.log(`[BULK RETRY] Contact does not exist for ${normalizedNumber}, adding...`);
-                        }
-                    } catch (err) {
-                        console.log(`[BULK RETRY] Contact check failed for ${normalizedNumber}, will add: ${err.message}`);
-                    }
-                    
-                    // Add contact if it doesn't exist or needs name update
-                    if (!contactExists) {
-                    try {
-                        // Generate name if not available
-                        let firstName = '';
-                        let lastName = '';
-                        
-                        if (message.name && message.name.trim()) {
-                            const nameParts = message.name.trim().split(' ').filter(part => part.length > 0);
-                            if (nameParts.length === 1) {
-                                firstName = nameParts[0];
-                                lastName = '';
-                            } else if (nameParts.length >= 2) {
-                                firstName = nameParts[0];
-                                lastName = nameParts.slice(1).join(' ');
-                            }
-                        } else {
-                            // Generate random 6-character alphanumeric string as firstName
-                            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-                            firstName = Array.from({length: 6}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
-                            lastName = 'bulk';
-                            console.log(`[BULK RETRY] Generated random name for ${normalizedNumber}: ${firstName} ${lastName}`);
-                        }
-                        
-                        // Add contact using saveOrEditAddressbookContact
-                        const contactChatId = await client.saveOrEditAddressbookContact(
-                            normalizedNumber.replace(/[^0-9]/g, ''),
-                            firstName,
-                            lastName,
-                            true // syncToAddressbook = true
-                        );
-                        
-                        console.log(`[BULK RETRY] Contact added successfully for ${normalizedNumber}: ${firstName} ${lastName}`);
-                        
-                        // Verify the contact was added
-                        try {
-                            const newContact = await client.getContactById(contactChatId._serialized || contactChatId);
-                            if (newContact) {
-                                const hasProperName = newContact.name && 
-                                                    newContact.name !== 'undefined' && 
-                                                    newContact.name !== undefined && 
-                                                    newContact.name !== `Contact ${normalizedNumber.replace(/[^0-9]/g, '')}` && 
-                                                    newContact.name !== normalizedNumber.replace(/[^0-9]/g, '');
-                                
-                                if (hasProperName) {
-                                    console.log(`[BULK RETRY] Contact verified with proper name: ${newContact.name}`);
-                                    // Use the returned chatId for sending message
-                                    chatId = contactChatId._serialized || contactChatId;
-                                } else {
-                                    console.log(`[BULK RETRY] Contact added but name verification failed: ${newContact.name}`);
-                                    throw new Error('Failed to add contact with proper name');
-                                }
-                            } else {
-                                console.log(`[BULK RETRY] Contact added but verification failed`);
-                                throw new Error('Contact verification failed');
-                            }
-                        } catch (verifyErr) {
-                            console.error(`[BULK RETRY] Contact verification error for ${normalizedNumber}:`, verifyErr.message);
-                            throw new Error(`Failed to verify contact: ${verifyErr.message}`);
-                        }
-                        
-                    } catch (addErr) {
-                        console.error(`[BULK RETRY] Failed to add contact for ${normalizedNumber}:`, addErr.message);
-                        message.status = 'failed';
-                        message.error = `Failed to add number to contacts before sending bulk message: ${addErr.message}`;
-                        failCount++;
-                        continue; // Skip to next message
-                    }
-                    }
-                }
-                
-                let media = null;
-                
-                if (message.media) {
-                    try {
-                        let mediaPath = message.media;
-                        if (mediaPath.startsWith('/message-templates/') || mediaPath.startsWith('/')) {
-                            mediaPath = path.join(__dirname, 'public', mediaPath);
-                        } else {
-                            mediaPath = path.join(__dirname, mediaPath);
-                        }
-                        
-                        if (fs.existsSync(mediaPath)) {
-                            const mimeType = mime.lookup(mediaPath) || 'application/octet-stream';
-                            const mediaBuffer = fs.readFileSync(mediaPath);
-                            media = new MessageMedia(mimeType, mediaBuffer.toString('base64'));
-                        } else {
-                            console.error(`Media file not found: ${mediaPath}`);
-                            message.status = 'failed';
-                            message.error = 'Media file not found';
-                            failCount++;
-                            continue;
-                        }
-                    } catch (mediaErr) {
-                        console.error('Error processing media:', mediaErr);
-                        message.status = 'failed';
-                        message.error = 'Media processing error: ' + mediaErr.message;
-                        failCount++;
-                        continue;
-                    }
-                }
-                
-                const result = await retryOperation(async () => {
-                    if (media) {
-                        return await client.sendMessage(chatId, media, { caption: message.text });
-                    } else {
-                        return await client.sendMessage(chatId, message.text);
-                    }
-                }, 3, 2000);
-                
-                if (result.success) {
-                    message.status = 'sent';
-                    message.sentAt = new Date().toISOString();
-                    delete message.error;
-                    successCount++;
-                    console.log(`Retry successful for ${message.to}`);
-                } else {
-                    message.status = 'failed';
-                    message.error = result.error || 'Unknown error';
-                    failCount++;
-                    console.error(`Retry failed for ${message.to}:`, result.error);
-                }
-                
-                // Small delay between messages
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                
-            } catch (err) {
-                console.error(`Error retrying message to ${message.to}:`, err);
-                message.status = 'failed';
-                message.error = err.message;
-                failCount++;
-            }
-        }
-        
-        // Save updated status
-        fs.writeFileSync(bulkMessagesPath, JSON.stringify(bulkMessages, null, 2));
-        
-        res.json({
-            success: true,
-            message: `Retry completed: ${successCount} successful, ${failCount} failed`,
-            successCount,
-            failCount
-        });
-        
-    } catch (err) {
-        console.error('Error in bulk retry:', err);
-        res.status(500).json({ 
-            error: 'Failed to retry bulk messages', 
-            details: err.message 
-        });
-    }
-});
-
-// Delete all records from a specific import
-app.delete('/api/bulk-delete/:filename', (req, res) => {
-    try {
-        const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        const filteredRecords = records.filter(r => r.import_filename !== filename);
-        
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, filteredRecords);
-        
-        res.json({ 
-            success: true, 
-            deleted: records.length - filteredRecords.length 
-        });
-    } catch (err) {
-        console.error('Bulk delete error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Cancel all pending records from a specific import
-app.post('/api/bulk-cancel/:filename', (req, res) => {
-    try {
-        const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        let cancelledCount = 0;
-        
-        for (let i = 0; i < records.length; i++) {
-            if (records[i].import_filename === filename && records[i].status === 'pending') {
-                records[i].status = 'cancelled';
-                cancelledCount++;
-            }
-        }
-        
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
-        
-        res.json({ 
-            success: true, 
-            cancelled: cancelledCount 
-        });
-    } catch (err) {
-        console.error('Bulk cancel error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Legacy bulk import endpoint (used by old code)
-app.post('/api/bulk/import', csvUpload.single('csv'), (req, res) => {
-    if (!req.file) return res.status(400).json({ error: 'No CSV file uploaded' });
-    
-    try {
-        const csvData = req.file.buffer.toString('utf8');
-        const records = parse(csvData, { 
-            columns: true, 
-            skip_empty_lines: true,
-            trim: true
-        });
-        
-        let errors = 0;
-        const imported = [];
-        const importFilename = req.file.originalname;
-        const importDatetime = new Date().toISOString();
-        
-        for (let i = 0; i < records.length; i++) {
-            const record = records[i];
-            if (!record.number || !record.message) {
-                errors++;
-                continue;
-            }
-            
-            // Add metadata
-            record.import_filename = importFilename;
-            record.import_datetime = importDatetime;
-            record.unique_id = uuidv4();
-            record.status = 'pending';
-            
-            imported.push(record);
-        }
-        
-        // Append to bulk file
-        const existing = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        existing.push(...imported);
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, existing);
-        
-        res.json({ imported: imported.length, errors });
-    } catch (err) {
-        console.error('Bulk import error:', err);
-        res.status(500).json({ error: 'Failed to import CSV: ' + err.message });
-    }
-});
-
-// Send bulk message now (legacy endpoint)
-app.post('/api/bulk/send-now/:uid', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    
-    try {
-        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        const recordIndex = records.findIndex(r => r.unique_id === req.params.uid);
-        
-        if (recordIndex === -1) {
-            return res.status(404).json({ error: 'Record not found' });
-        }
-        
-        const record = records[recordIndex];
-        
-        // Set send time to now and status to pending
-        record.send_datetime = new Date().toISOString();
-        record.status = 'pending';
-        
-        // Update the record
-        records[recordIndex] = record;
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
-        
-        res.json({ success: true });
-    } catch (err) {
-        console.error('Bulk send-now error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Schedule bulk message (legacy endpoint)
-app.post('/api/bulk/schedule/:uid', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    
-    try {
-        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        const recordIndex = records.findIndex(r => r.unique_id === req.params.uid);
-        
-        if (recordIndex === -1) {
-            return res.status(404).json({ error: 'Record not found' });
-        }
-        
-        const record = records[recordIndex];
-        
-        // Set send time to 1 minute from now
-        const oneMinuteFromNow = new Date(Date.now() + 60000);
-        record.send_datetime = oneMinuteFromNow.toISOString();
-        record.status = 'pending';
-        
-        // Update the record
-        records[recordIndex] = record;
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
-        
-        res.json({ success: true });
-    } catch (err) {
-        console.error('Bulk schedule error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Delete bulk records by filename (legacy endpoint)
-app.delete('/api/bulk/:filename', (req, res) => {
-    try {
-        const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        const filteredRecords = records.filter(r => r.import_filename !== filename);
-        
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, filteredRecords);
-        
-        res.json({ 
-            success: true, 
-            deleted: records.length - filteredRecords.length 
-        });
-    } catch (err) {
-        console.error('Bulk delete error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Cancel bulk records by filename (legacy endpoint)
-app.post('/api/bulk/cancel/:filename', (req, res) => {
-    try {
-        const filename = decodeURIComponent(req.params.filename);
-        const records = readJson(accountPaths ? accountPaths.bulkFile : BULK_FILE);
-        let cancelledCount = 0;
-        
-        for (let i = 0; i < records.length; i++) {
-            if (records[i].import_filename === filename && records[i].status === 'pending') {
-                records[i].status = 'cancelled';
-                cancelledCount++;
-            }
-        }
-        
-        writeJson(accountPaths ? accountPaths.bulkFile : BULK_FILE, records);
-        
-        res.json({ 
-            success: true, 
-            cancelled: cancelledCount 
-        });
-    } catch (err) {
-        console.error('Bulk cancel error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
+// Bulk routes are now in src/routes/bulk.js
 
 // Get current server time and timezone
 app.get('/api/time', (req, res) => {
@@ -4524,1002 +3091,12 @@ process.on('SIGINT', () => {
 startServer().catch(console.error);
 
 // Get all detected channels (from message stream)
-app.get('/api/detected-channels', (req, res) => {
-    try {
-        const channels = getDetectedChannels();
-        res.json({ channels });
-    } catch (err) {
-        res.status(500).json({ error: 'Failed to fetch detected channels', details: err.message });
-    }
-});
+// Detected channels and discovery routes are now in src/routes/channels.js
 
-// Manual channel discovery endpoint
-app.post('/api/channels/discover', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp client not ready' });
-    
-    try {
-        console.log('[API] Manual channel discovery requested');
-        await discoverChannels();
-        const channels = getDetectedChannels();
-        
-        res.json({
-            success: true,
-            message: 'Channel discovery completed',
-            channels: channels.length,
-            discovered: channels
-        });
-    } catch (err) {
-        console.error('Failed to discover channels:', err);
-        res.status(500).json({ error: 'Failed to discover channels', details: err.message });
-    }
-});
-
-// Get leads data
-app.get('/api/leads', (req, res) => {
-    try {
-        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
-        res.json(leadsData);
-    } catch (err) {
-        console.error('Failed to fetch leads:', err);
-        res.status(500).json({ error: 'Failed to fetch leads', details: err.message });
-    }
-});
-
-// Save leads data
-app.post('/api/leads', (req, res) => {
-    try {
-        const { leads } = req.body;
-        if (!leads || !Array.isArray(leads)) {
-            return res.status(400).json({ error: 'Invalid leads data' });
-        }
-        
-        // Ensure we don't exceed 2000 records (keep oldest when exceeded)
-        let limitedLeads = leads;
-        if (limitedLeads.length > 2000) {
-            // Sort by created_on (oldest first) and keep only latest 2000
-            limitedLeads = leads
-                .sort((a, b) => new Date(a.created_on) - new Date(b.created_on))
-                .slice(-2000);
-        }
-        
-        writeJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: limitedLeads });
-        res.json({ success: true, count: limitedLeads.length });
-    } catch (err) {
-        console.error('Failed to save leads:', err);
-        res.status(500).json({ error: 'Failed to save leads', details: err.message });
-    }
-});
-
-// Get leads auto chat configuration
-app.get('/api/leads/config', (req, res) => {
-    try {
-        const config = readJson(accountPaths ? accountPaths.leadsConfigFile : LEADS_CONFIG_FILE, {
-            enabled: false,
-            systemPrompt: '',
-            includeJsonContext: true,
-            autoReply: false,
-            autoReplyPrompt: ''
-        });
-        res.json(config);
-    } catch (err) {
-        console.error('Failed to load leads config:', err);
-        res.status(500).json({ error: 'Failed to load leads config', details: err.message });
-    }
-});
-
-// Save leads auto chat configuration
-app.post('/api/leads/config', (req, res) => {
-    try {
-        const { enabled, systemPrompt, includeJsonContext, autoReply, autoReplyPrompt } = req.body;
-        
-        const config = {
-            enabled: Boolean(enabled),
-            systemPrompt: systemPrompt || '',
-            includeJsonContext: Boolean(includeJsonContext),
-            autoReply: Boolean(autoReply),
-            autoReplyPrompt: autoReplyPrompt || ''
-        };
-        
-        writeJson(accountPaths ? accountPaths.leadsConfigFile : LEADS_CONFIG_FILE, config);
-        console.log('Leads auto chat config saved:', config);
-        res.json({ success: true, config });
-    } catch (err) {
-        console.error('Failed to save leads config:', err);
-        res.status(500).json({ error: 'Failed to save leads config', details: err.message });
-    }
-});
-
-// Gemini API endpoint for leads auto chat
-app.post('/api/gemini/chat', async (req, res) => {
-    try {
-        const { systemPrompt, context, lead, autoReply, autoReplyPrompt, chatHistory } = req.body;
-        
-        if (!systemPrompt) {
-            return res.status(400).json({ error: 'System prompt is required' });
-        }
-
-        let fullPrompt = systemPrompt;
-        
-        if (context) {
-            fullPrompt += `\n\nLead Context:\n${context}`;
-        }
-        
-        if (chatHistory) {
-            fullPrompt += `\n\nChat History:\n${chatHistory}`;
-        }
-        
-        if (autoReply && autoReplyPrompt) {
-            fullPrompt += `\n\nAuto Reply Instructions:\n${autoReplyPrompt}`;
-        }
-
-        const response = await callGenAI({
-            systemPrompt: fullPrompt,
-            autoReplyPrompt: autoReplyPrompt || '',
-            chatHistory: chatHistory || '',
-            userMessage: `Generate a response for lead: ${lead.name} (${lead.mobile})`
-        });
-
-        res.json({ success: true, response });
-    } catch (err) {
-        console.error('Gemini chat error:', err);
-        res.status(500).json({ error: 'Failed to generate response', details: err.message });
-    }
-});
-
-// Proxy endpoint for external leads API (to avoid CORS issues)
-app.post('/api/proxy/leads', async (req, res) => {
-    try {
-        const apiUrl = process.env.LEADS_API_URL;
-        const apiKey = process.env.LEADS_API_KEY;
-
-        if (!apiUrl || !apiKey) {
-            return res.status(500).json({ 
-                error: 'Leads API configuration missing', 
-                details: 'LEADS_API_URL and LEADS_API_KEY environment variables must be set in .env file',
-                configuration: {
-                    required: [
-                        'LEADS_API_URL=https://your-api-endpoint.com/api/leads',
-                        'LEADS_API_KEY=your-api-key-here'
-                    ],
-                    sampleFormat: {
-                        "success": true,
-                        "data": [
-                            {
-                                "id": 1,
-                                "name": "John Doe",
-                                "phone": "+1234567890",
-                                "email": "john@example.com",
-                                "location": "New York",
-                                "status": "active",
-                                "created_at": "2025-01-27T10:00:00Z"
-                            },
-                            {
-                                "id": 2,
-                                "name": "Jane Smith",
-                                "phone": "+1234567891",
-                                "email": "jane@example.com",
-                                "location": "Los Angeles",
-                                "status": "pending",
-                                "created_at": "2025-01-27T11:00:00Z"
-                            },
-                            {
-                                "id": 3,
-                                "name": "Bob Johnson",
-                                "phone": "+1234567892",
-                                "email": "bob@example.com",
-                                "location": "Chicago",
-                                "status": "active",
-                                "created_at": "2025-01-27T12:00:00Z"
-                            },
-                            {
-                                "id": 4,
-                                "name": "Alice Brown",
-                                "phone": "+1234567893",
-                                "email": "alice@example.com",
-                                "location": "Houston",
-                                "status": "inactive",
-                                "created_at": "2025-01-27T13:00:00Z"
-                            },
-                            {
-                                "id": 5,
-                                "name": "Charlie Wilson",
-                                "phone": "+1234567894",
-                                "email": "charlie@example.com",
-                                "location": "Phoenix",
-                                "status": "active",
-                                "created_at": "2025-01-27T14:00:00Z"
-                            }
-                        ]
-                    }
-                }
-            });
-        }
-
-        const response = await fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ apikey: apiKey })
-        });
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const data = await response.json();
-        res.json(data);
-    } catch (err) {
-        console.error('Proxy leads API error:', err);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to fetch leads from external API', 
-            details: err.message 
-        });
-    }
-});
+// Leads routes are now in src/routes/leads.js
 
 // Check if contact exists in WhatsApp
-app.post('/api/contacts/check', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    
-    try {
-        const { mobile } = req.body;
-        if (!mobile) {
-            return res.status(400).json({ error: 'Mobile number is required' });
-        }
-
-        console.log('Checking contact status for:', mobile);
-
-        // Normalize mobile number
-        const normalizedNumber = mobile.replace(/[^0-9]/g, '');
-        const chatId = normalizedNumber + '@c.us';
-        
-        console.log('Normalized chat ID:', chatId);
-        
-        // Try to get the contact using WhatsApp Web.js methods
-        try {
-            const contact = await client.getContactById(chatId._serialized || chatId);
-            
-            if (contact) {
-                console.log('Contact found:', {
-                    id: contact.id,
-                    name: contact.name,
-                    number: contact.number,
-                    isMyContact: contact.isMyContact,
-                    isWAContact: contact.isWAContact,
-                    pushname: contact.pushname,
-                    shortName: contact.shortName
-                });
-                
-                // Check if contact has a proper name (not just the number or default name)
-                const hasProperName = contact.name && 
-                                    contact.name !== normalizedNumber && 
-                                    contact.name !== `Contact ${normalizedNumber}` &&
-                                    contact.name !== 'undefined' &&
-                                    contact.name !== undefined &&
-                                    contact.name.length > 0;
-                
-                console.log('Contact name check:', {
-                    name: contact.name,
-                    normalizedNumber: normalizedNumber,
-                    hasProperName: hasProperName,
-                    nameLength: contact.name ? contact.name.length : 0
-                });
-                
-                // Contact exists if it's either in our contacts or is a WhatsApp user
-                const exists = contact.isMyContact || contact.isWAContact;
-                
-                res.json({ 
-                    exists: exists,
-                    hasProperName: hasProperName,
-                    contact: {
-                        id: contact.id,
-                        name: contact.name,
-                        number: contact.number,
-                        isMyContact: contact.isMyContact,
-                        isWAContact: contact.isWAContact,
-                        pushname: contact.pushname,
-                        shortName: contact.shortName
-                    }
-                });
-            } else {
-                console.log('Contact not found');
-                res.json({ exists: false, hasProperName: false });
-            }
-        } catch (contactErr) {
-            console.log('Error getting contact, trying chat method:', contactErr.message);
-            
-            // Fallback: try to get the chat
-            try {
-                const chat = await client.getChatById(chatId);
-                if (chat) {
-                    console.log('Chat found for contact');
-                    res.json({ exists: true, hasProperName: false, contact: { id: chat.id } });
-                } else {
-                    console.log('No chat found for contact');
-                    res.json({ exists: false, hasProperName: false });
-                }
-            } catch (chatErr) {
-                console.log('Contact not found (expected for new contacts):', chatErr.message);
-                res.json({ exists: false, hasProperName: false });
-            }
-        }
-    } catch (err) {
-        console.error('Error checking contact status:', err);
-        res.status(500).json({ 
-            error: 'Failed to check contact status', 
-            details: err.message 
-        });
-    }
-});
-
-// Test endpoint for debugging
-app.get('/api/contacts/test', (req, res) => {
-    res.json({ success: true, message: 'Contacts API is working' });
-});
-
-// Process leads contacts - add contacts for leads with failed/error status
-app.post('/api/leads/process-contacts', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    
-    try {
-        console.log('[LEADS] Processing contacts for leads...');
-        
-        // Read leads data
-        const leadsData = readJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, { leads: [] });
-        const leadsNeedingContacts = leadsData.leads.filter(lead => 
-            lead.contact_added !== true && 
-            lead.contact_added !== 'error' &&
-            lead.mobile
-        );
-        
-        console.log(`[LEADS] Found ${leadsNeedingContacts.length} leads needing contacts`);
-        
-        if (leadsNeedingContacts.length === 0) {
-            return res.json({
-                success: true,
-                message: 'No leads need contact processing',
-                processed: 0,
-                successful: 0,
-                failed: 0
-            });
-        }
-        
-        const results = [];
-        const logs = [];
-        
-        for (let i = 0; i < leadsNeedingContacts.length; i++) {
-            const lead = leadsNeedingContacts[i];
-            const { mobile, name } = lead;
-            
-            // Find the original lead in the full leads data
-            const originalLeadIndex = leadsData.leads.findIndex(l => l.mobile === mobile);
-            if (originalLeadIndex === -1) {
-                logs.push(`[${i + 1}] ⚠️ Lead not found in original data: ${mobile}`);
-                continue;
-            }
-            
-            logs.push(`[${i + 1}] 📞 Processing: ${mobile} (${name})`);
-            
-            try {
-                // Normalize phone number
-                const normalizedNumber = mobile.replace(/[^0-9]/g, '');
-                const chatId = normalizedNumber + '@c.us';
-                
-                // Check if contact already exists
-                let contactExists = false;
-                let existingContact = null;
-                
-                try {
-                    existingContact = await client.getContactById(chatId);
-                    if (existingContact && existingContact.isMyContact) {
-                        // Check if contact has proper name
-                        const hasProperName = existingContact.name && 
-                                            existingContact.name !== 'undefined' && 
-                                            existingContact.name !== undefined && 
-                                            existingContact.name !== `Contact ${normalizedNumber}` && 
-                                            existingContact.name !== normalizedNumber;
-                        
-                        if (hasProperName) {
-                            logs.push(`[${i + 1}] ✅ Contact already exists with proper name: ${existingContact.name}`);
-                            results.push({
-                                index: i,
-                                success: true,
-                                message: 'Contact already exists with proper name',
-                                contact: {
-                                    id: existingContact.id,
-                                    name: existingContact.name,
-                                    number: existingContact.number,
-                                    isMyContact: existingContact.isMyContact,
-                                    isWAContact: existingContact.isWAContact
-                                }
-                            });
-                            contactExists = true;
-                        } else {
-                            logs.push(`[${i + 1}] ⚠️ Contact exists but needs name update: ${existingContact.name} -> ${name}`);
-                        }
-                    }
-                } catch (err) {
-                    logs.push(`[${i + 1}] ℹ️ Contact check failed, will add: ${err.message}`);
-                }
-                
-                if (!contactExists) {
-                    // Parse name into firstName and lastName
-                    let firstName = '';
-                    let lastName = '';
-                    
-                    if (name && name.trim()) {
-                        const nameParts = name.trim().split(' ').filter(part => part.trim());
-                        if (nameParts.length === 1) {
-                            firstName = nameParts[0];
-                            lastName = '';
-                        } else if (nameParts.length >= 2) {
-                            firstName = nameParts[0];
-                            lastName = nameParts.slice(1).join(' ');
-                        }
-                    } else {
-                        // Generate random name if no name provided
-                        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-                        firstName = Array.from({length: 6}, () => chars.charAt(Math.floor(Math.random() * chars.length))).join('');
-                        lastName = 'lead';
-                        logs.push(`[${i + 1}] 🔄 Generated random name: ${firstName} ${lastName}`);
-                    }
-                    
-                    // Add contact using saveOrEditAddressbookContact
-                    const contactChatId = await client.saveOrEditAddressbookContact(
-                        normalizedNumber,
-                        firstName,
-                        lastName,
-                        true // syncToAddressbook = true
-                    );
-                    
-                    logs.push(`[${i + 1}] ✅ Contact added successfully: ${firstName} ${lastName}`);
-                    
-                    // Verify the contact was added
-                    try {
-                        const newContact = await client.getContactById(contactChatId._serialized || contactChatId);
-                        if (newContact) {
-                            const hasProperName = newContact.name && 
-                                                newContact.name !== 'undefined' && 
-                                                newContact.name !== undefined && 
-                                                newContact.name !== `Contact ${normalizedNumber}` && 
-                                                newContact.name !== normalizedNumber;
-                            
-                            if (hasProperName) {
-                                logs.push(`[${i + 1}] ✅ Contact verified with proper name: ${newContact.name}`);
-                                results.push({
-                                    index: i,
-                                    success: true,
-                                    message: 'Contact added successfully',
-                                    contact: {
-                                        id: newContact.id,
-                                        name: newContact.name,
-                                        number: newContact.number,
-                                        isMyContact: newContact.isMyContact,
-                                        isWAContact: newContact.isWAContact
-                                    }
-                                });
-                                
-                                // Update lead status
-                                leadsData.leads[originalLeadIndex].contact_added = true;
-                                leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
-                                
-                            } else {
-                                logs.push(`[${i + 1}] ⚠️ Contact added but name verification failed: ${newContact.name}`);
-                                results.push({
-                                    index: i,
-                                    success: true,
-                                    message: 'Contact added but name verification failed',
-                                    contact: {
-                                        id: newContact.id,
-                                        name: newContact.name,
-                                        number: newContact.number,
-                                        isMyContact: newContact.isMyContact,
-                                        isWAContact: newContact.isWAContact
-                                    },
-                                    needsManualNameUpdate: true
-                                });
-                                
-                                // Update lead status
-                                leadsData.leads[originalLeadIndex].contact_added = 'error';
-                                leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
-                            }
-                        } else {
-                            logs.push(`[${i + 1}] ⚠️ Contact added but verification failed`);
-                            results.push({
-                                index: i,
-                                success: true,
-                                message: 'Contact added but verification failed',
-                                chatId: contactChatId
-                            });
-                            
-                            // Update lead status
-                            leadsData.leads[originalLeadIndex].contact_added = 'error';
-                            leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
-                        }
-                    } catch (verifyErr) {
-                        logs.push(`[${i + 1}] ⚠️ Contact added but verification error: ${verifyErr.message}`);
-                        results.push({
-                            index: i,
-                            success: true,
-                            message: 'Contact added but verification failed',
-                            chatId: contactChatId,
-                            verificationError: verifyErr.message
-                        });
-                        
-                        // Update lead status
-                        leadsData.leads[originalLeadIndex].contact_added = 'error';
-                        leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
-                    }
-                }
-                
-            } catch (err) {
-                logs.push(`[${i + 1}] ❌ Failed to add contact: ${err.message}`);
-                results.push({
-                    index: i,
-                    success: false,
-                    error: err.message,
-                    mobile: mobile
-                });
-                
-                // Update lead status
-                leadsData.leads[originalLeadIndex].contact_added = 'error';
-                leadsData.leads[originalLeadIndex].last_updated = new Date().toISOString();
-            }
-        }
-        
-        // Save updated leads data
-        writeJson(accountPaths ? accountPaths.leadsFile : LEADS_FILE, leadsData);
-        
-        const successCount = results.filter(r => r.success).length;
-        const errorCount = results.filter(r => !r.success).length;
-        
-        logs.push(`\n📊 Summary: ${successCount} successful, ${errorCount} failed out of ${leadsNeedingContacts.length} total`);
-        
-        res.json({
-            success: true,
-            results: results,
-            logs: logs,
-            summary: {
-                total: leadsNeedingContacts.length,
-                successful: successCount,
-                failed: errorCount
-            }
-        });
-        
-    } catch (err) {
-        console.error('Error processing leads contacts:', err);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to process leads contacts',
-            details: err.message
-        });
-    }
-});
-
-// Add multiple contacts to WhatsApp
-app.post('/api/contacts/add-multiple', async (req, res) => {
-    console.log('[CONTACTS] Add multiple contacts endpoint called');
-    console.log('[CONTACTS] Request body:', req.body);
-    
-    if (!ready) {
-        console.log('[CONTACTS] WhatsApp not ready');
-        return res.status(503).json({ error: 'WhatsApp not ready' });
-    }
-    
-    try {
-        const { contacts } = req.body;
-        console.log('[CONTACTS] Contacts received:', contacts);
-        
-        if (!contacts || !Array.isArray(contacts) || contacts.length === 0) {
-            console.log('[CONTACTS] Invalid contacts data');
-            return res.status(400).json({ error: 'Contacts array is required' });
-        }
-        
-        if (contacts.length > 1000) {
-            return res.status(400).json({ error: 'Maximum 1000 contacts allowed per request' });
-        }
-        
-        const results = [];
-        const logs = [];
-        
-        for (let i = 0; i < contacts.length; i++) {
-            const contact = contacts[i];
-            const { number, firstName, lastName, originalName } = contact;
-            
-            if (!number) {
-                results.push({ 
-                    index: i, 
-                    success: false, 
-                    error: 'Missing phone number',
-                    number: number || 'unknown'
-                });
-                logs.push(`[${i + 1}] ❌ Missing phone number`);
-                continue;
-            }
-            
-            try {
-                // Normalize phone number
-                const normalizedNumber = number.replace(/[^0-9]/g, '');
-                const chatId = normalizedNumber + '@c.us';
-                
-                logs.push(`[${i + 1}] 📞 Processing: ${number} (${originalName || firstName + ' ' + lastName})`);
-                
-                // Check if contact already exists
-                let contactExists = false;
-                try {
-                    const existingContact = await client.getContactById(chatId);
-                    if (existingContact && existingContact.isMyContact) {
-                        logs.push(`[${i + 1}] ✅ Contact already exists: ${existingContact.name}`);
-                        results.push({
-                            index: i,
-                            success: true,
-                            message: 'Contact already exists',
-                            contact: {
-                                id: existingContact.id,
-                                name: existingContact.name,
-                                number: existingContact.number,
-                                isMyContact: existingContact.isMyContact,
-                                isWAContact: existingContact.isWAContact
-                            }
-                        });
-                        contactExists = true;
-                    }
-                } catch (err) {
-                    logs.push(`[${i + 1}] ℹ️ Contact check failed, will add: ${err.message}`);
-                }
-                
-                if (!contactExists) {
-                    // v1.34.2+ fix: firstName must never be empty
-                    const finalFirstName = (firstName && firstName.trim()) ? firstName.trim() : normalizedNumber;
-                    const finalLastName = (lastName && lastName.trim()) ? lastName.trim() : '';
-                    
-                    // Add contact using saveOrEditAddressbookContact
-                    const contactChatId = await client.saveOrEditAddressbookContact(
-                        normalizedNumber,
-                        finalFirstName,  // Must not be empty
-                        finalLastName,
-                        true // syncToAddressbook = true
-                    );
-                    
-                    logs.push(`[${i + 1}] ✅ Contact added successfully: ${firstName} ${lastName}`);
-                    
-                    // Verify the contact was added
-                    try {
-                        const newContact = await client.getContactById(contactChatId._serialized || contactChatId);
-                        if (newContact) {
-                            const hasProperName = newContact.name && 
-                                                newContact.name !== 'undefined' && 
-                                                newContact.name !== undefined && 
-                                                newContact.name !== `Contact ${normalizedNumber}` && 
-                                                newContact.name !== normalizedNumber;
-                            
-                            if (hasProperName) {
-                                logs.push(`[${i + 1}] ✅ Contact verified with proper name: ${newContact.name}`);
-                                results.push({
-                                    index: i,
-                                    success: true,
-                                    message: 'Contact added successfully',
-                                    contact: {
-                                        id: newContact.id,
-                                        name: newContact.name,
-                                        number: newContact.number,
-                                        isMyContact: newContact.isMyContact,
-                                        isWAContact: newContact.isWAContact
-                                    }
-                                });
-                            } else {
-                                logs.push(`[${i + 1}] ⚠️ Contact added but name verification failed: ${newContact.name}`);
-                                results.push({
-                                    index: i,
-                                    success: true,
-                                    message: 'Contact added but name verification failed',
-                                    contact: {
-                                        id: newContact.id,
-                                        name: newContact.name,
-                                        number: newContact.number,
-                                        isMyContact: newContact.isMyContact,
-                                        isWAContact: newContact.isWAContact
-                                    },
-                                    needsManualNameUpdate: true
-                                });
-                            }
-                        } else {
-                            logs.push(`[${i + 1}] ⚠️ Contact added but verification failed`);
-                            results.push({
-                                index: i,
-                                success: true,
-                                message: 'Contact added but verification failed',
-                                chatId: contactChatId
-                            });
-                        }
-                    } catch (verifyErr) {
-                        logs.push(`[${i + 1}] ⚠️ Contact added but verification error: ${verifyErr.message}`);
-                        results.push({
-                            index: i,
-                            success: true,
-                            message: 'Contact added but verification failed',
-                            chatId: contactChatId,
-                            verificationError: verifyErr.message
-                        });
-                    }
-                }
-                
-            } catch (err) {
-                logs.push(`[${i + 1}] ❌ Failed to add contact: ${err.message}`);
-                results.push({
-                    index: i,
-                    success: false,
-                    error: err.message,
-                    number: number
-                });
-            }
-        }
-        
-        const successCount = results.filter(r => r.success).length;
-        const errorCount = results.filter(r => !r.success).length;
-        
-        logs.push(`\n📊 Summary: ${successCount} successful, ${errorCount} failed`);
-        
-        res.json({
-            success: true,
-            results: results,
-            logs: logs,
-            summary: {
-                total: contacts.length,
-                successful: successCount,
-                failed: errorCount
-            }
-        });
-        
-            } catch (err) {
-            console.error('Error adding multiple contacts:', err);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to add contacts',
-                details: err.message
-            });
-        }
-    });
-
-// Add contact to WhatsApp
-app.post('/api/contacts/add', async (req, res) => {
-    if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
-    
-    try {
-        const { mobile, name } = req.body;
-        if (!mobile) {
-            return res.status(400).json({ error: 'Mobile number is required' });
-        }
-
-        console.log('Adding contact:', { mobile, name });
-
-        // Normalize mobile number
-        const normalizedNumber = mobile.replace(/[^0-9]/g, '');
-        const chatId = normalizedNumber + '@c.us';
-        
-        console.log('Normalized chat ID:', chatId);
-        
-        // Check if contact already exists
-        let existingContact = null;
-        let needsUpdate = false;
-        
-        try {
-            existingContact = await client.getContactById(chatId._serialized || chatId);
-            if (existingContact) {
-                console.log('Contact found:', {
-                    id: existingContact.id,
-                    name: existingContact.name,
-                    number: existingContact.number,
-                    isMyContact: existingContact.isMyContact,
-                    isWAContact: existingContact.isWAContact
-                });
-                
-                // Check if contact needs name update
-                if (name && (!existingContact.name || existingContact.name === `Contact ${normalizedNumber}` || existingContact.name === normalizedNumber || existingContact.name === 'undefined' || existingContact.name === undefined)) {
-                    console.log('Contact exists but needs name update:', existingContact.name, '->', name);
-                    needsUpdate = true;
-                } else if (name && existingContact.name === name) {
-                    console.log('Contact already exists with correct name');
-                    return res.json({ 
-                        success: true, 
-                        message: 'Contact already exists with correct name',
-                        contact: {
-                            id: existingContact.id,
-                            name: existingContact.name,
-                            number: existingContact.number,
-                            isMyContact: existingContact.isMyContact,
-                            isWAContact: existingContact.isWAContact
-                        }
-                    });
-                } else {
-                    console.log('Contact already exists with different name:', existingContact.name);
-                    return res.json({ 
-                        success: true, 
-                        message: 'Contact already exists',
-                        contact: {
-                            id: existingContact.id,
-                            name: existingContact.name,
-                            number: existingContact.number,
-                            isMyContact: existingContact.isMyContact,
-                            isWAContact: existingContact.isWAContact
-                        }
-                    });
-                }
-            }
-        } catch (err) {
-            console.log('Contact does not exist, will add new contact');
-            // Contact doesn't exist, continue to add
-        }
-        
-        // If contact exists but needs name update, try to update it
-        if (needsUpdate && existingContact) {
-            try {
-                console.log('Attempting to update contact name...');
-                
-                // Try to get the chat and update contact name
-                const chat = await client.getChatById(chatId);
-                if (chat) {
-                    // Update the contact name in the chat
-                    // Note: WhatsApp Web.js doesn't have a direct method to update contact name
-                    // We'll try to recreate the contact with the correct name
-                    console.log('Will recreate contact with proper name');
-                }
-            } catch (updateErr) {
-                console.log('Could not update contact, will recreate:', updateErr.message);
-            }
-        }
-        
-        // Try to add or update contact using saveOrEditAddressbookContact
-        try {
-            console.log('Attempting to add/update contact using saveOrEditAddressbookContact...');
-            
-            // Parse name into firstName and lastName with improved handling
-            let firstName = '';
-            let lastName = '';
-            
-            if (name && typeof name === 'string' && name.trim()) {
-                const trimmedName = name.trim();
-                const nameParts = trimmedName.split(' ').filter(part => part.length > 0);
-                
-                if (nameParts.length === 0) {
-                    // Empty or whitespace-only name
-                    firstName = '';
-                    lastName = '';
-                } else if (nameParts.length === 1) {
-                    // Single word name
-                    firstName = nameParts[0];
-                    lastName = '';
-                } else if (nameParts.length === 2) {
-                    // Two word name
-                    firstName = nameParts[0];
-                    lastName = nameParts[1];
-                } else {
-                    // Multiple word name - first word as firstName, rest as lastName
-                    firstName = nameParts[0];
-                    lastName = nameParts.slice(1).join(' ');
-                }
-            } else {
-                // No name provided
-                firstName = '';
-                lastName = '';
-            }
-            
-            console.log('Parsed name:', { firstName, lastName, originalName: name });
-            
-            // v1.34.2+ fix: firstName must never be empty (Nov 2025 fix)
-            const finalFirstName = (firstName && firstName.trim()) ? firstName.trim() : normalizedNumber;
-            const finalLastName = (lastName && lastName.trim()) ? lastName.trim() : '';
-            
-            // Call saveOrEditAddressbookContact with syncToAddressbook = true
-            const chatId = await client.saveOrEditAddressbookContact(
-                normalizedNumber, 
-                finalFirstName,  // Must not be empty (v1.34.2+ fix)
-                finalLastName, 
-                true // syncToAddressbook = true
-            );
-            
-            console.log('saveOrEditAddressbookContact successful, chatId:', chatId);
-            
-            // Verify the contact was added/updated
-            // Use the original chatId string for verification, not the returned object
-            try {
-                const contact = await client.getContactById(chatId._serialized || chatId);
-                
-                if (contact) {
-                    console.log('Contact successfully added/updated:', {
-                        id: contact.id,
-                        name: contact.name,
-                        number: contact.number,
-                        isMyContact: contact.isMyContact,
-                        isWAContact: contact.isWAContact
-                    });
-                    
-                    res.json({ 
-                        success: true, 
-                        message: 'Contact successfully added/updated',
-                        contact: {
-                            id: contact.id,
-                            name: contact.name,
-                            number: contact.number,
-                            isMyContact: contact.isMyContact,
-                            isWAContact: contact.isWAContact
-                        }
-                    });
-                } else {
-                    console.log('Contact added but could not verify');
-                    res.json({ 
-                        success: true, 
-                        message: 'Contact added but verification failed',
-                        chatId: chatId
-                    });
-                }
-            } catch (verifyErr) {
-                console.log('Verification failed but contact was likely added successfully:', verifyErr.message);
-                // Since saveOrEditAddressbookContact succeeded, we'll consider this a success
-                res.json({ 
-                    success: true, 
-                    message: 'Contact added successfully (verification failed)',
-                    chatId: chatId,
-                    verificationError: verifyErr.message
-                });
-            }
-            
-        } catch (addErr) {
-            console.error('Error adding/updating contact with saveOrEditAddressbookContact:', addErr);
-            
-            // Fallback: try to verify if contact exists anyway
-            try {
-                const contact = await client.getContactById(chatId._serialized || chatId);
-                
-                if (contact && contact.isWAContact) {
-                    console.log('Contact exists in WhatsApp (fallback verification):', {
-                        id: contact.id,
-                        name: contact.name,
-                        number: contact.number,
-                        isMyContact: contact.isMyContact,
-                        isWAContact: contact.isWAContact
-                    });
-                    
-                    res.json({ 
-                        success: true, 
-                        message: 'Contact exists in WhatsApp but name update may have failed',
-                        contact: {
-                            id: contact.id,
-                            name: contact.name,
-                            number: contact.number,
-                            isMyContact: contact.isMyContact,
-                            isWAContact: contact.isWAContact
-                        },
-                        needsManualNameUpdate: contact.name === undefined || contact.name === 'undefined'
-                    });
-                } else {
-                    console.log('Contact does not exist in WhatsApp');
-                    res.status(404).json({ 
-                        success: false, 
-                        error: 'Contact not found in WhatsApp',
-                        details: 'The contact does not exist in WhatsApp'
-                    });
-                }
-            } catch (verifyErr) {
-                console.error('Error in fallback contact verification:', verifyErr);
-                res.status(500).json({ 
-                    success: false, 
-                    error: 'Failed to add or verify contact', 
-                    details: addErr.message 
-                });
-            }
-        }
-    } catch (err) {
-        console.error('Error adding contact:', err);
-        res.status(500).json({ 
-            success: false, 
-            error: 'Failed to add contact', 
-            details: err.message 
-        });
-    }
-});
+// Contacts routes are now in src/routes/contacts.js
 
 // Test leads API configuration
 app.post('/api/test-leads-api', async (req, res) => {
@@ -5589,66 +3166,17 @@ function processLeadsDataWithMapping(data, fieldMapping) {
     }));
 }
 
-// Get leads configuration
-app.get('/api/leads-config', (req, res) => {
-    try {
-        const configPath = accountPaths ? accountPaths.leadsConfigFile : path.join(__dirname, 'leads-config.json');
-        if (!fs.existsSync(configPath)) {
-            return res.status(404).json({ error: 'Leads configuration file not found' });
-        }
-        
-        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        res.json(config);
-    } catch (err) {
-        console.error('Error reading leads config:', err);
-        res.status(500).json({ error: 'Failed to read leads configuration' });
-    }
-});
+// Leads config routes are now in src/routes/leads.js
+// Media upload routes are now in src/routes/media.js
 
-// Save leads configuration
-app.post('/api/leads-config', (req, res) => {
-    try {
-        const config = req.body;
-        const configPath = accountPaths ? accountPaths.leadsConfigFile : path.join(__dirname, 'leads-config.json');
-        
-        // Ensure directory exists
-        const dir = path.dirname(configPath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        
-        fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
-        
-        res.json({ success: true, message: 'Configuration saved successfully' });
-    } catch (err) {
-        console.error('Error saving leads config:', err);
-        res.status(500).json({ error: 'Failed to save leads configuration' });
-    }
-});
-
-// Upload media for message templates
-app.post('/api/upload-media', upload.single('media'), (req, res) => {
-    try {
-        if (!req.file) {
-            return res.status(400).json({ error: 'No file uploaded' });
-        }
-
-        const filePath = req.file.path;
-        const fileName = req.file.filename;
-        const fileUrl = `/message-templates/${fileName}`;
-
-        console.log('Media uploaded:', { fileName, filePath, fileUrl });
-
+// Simple cloud status endpoint for frontend (returns baseUrl for channel links)
+app.get('/api/cloud/status', (req, res) => {
+    const baseUrl = process.env.CLOUDFLARE_BASE_URL || null;
         res.json({
-            success: true,
-            fileName: fileName,
-            filePath: filePath,
-            fileUrl: fileUrl
-        });
-    } catch (error) {
-        console.error('Error uploading media:', error);
-        res.status(500).json({ error: 'Failed to upload media', details: error.message });
-    }
+        available: !!cloudflareClient,
+        baseUrl: baseUrl,
+        connected: cloudflareClient ? cloudflareClient.isConnected : false
+    });
 });
 
 // Cloudflare API endpoints for external apps
@@ -5657,18 +3185,25 @@ app.get('/api/cloudflare/status', async (req, res) => {
         return res.status(503).json({ 
             error: 'Cloudflare sync not available',
             message: 'Cloudflare integration is not configured or not connected',
-            available: false
+            available: false,
+            baseUrl: process.env.CLOUDFLARE_BASE_URL || null
         });
     }
     
     try {
         const status = await cloudflareClient.getStatus();
-        res.json({ success: true, status, available: true });
+        res.json({ 
+            success: true, 
+            status, 
+            available: true,
+            baseUrl: process.env.CLOUDFLARE_BASE_URL || null
+        });
     } catch (error) {
         res.status(500).json({ 
             error: 'Cloudflare sync temporarily unavailable',
             message: 'Unable to connect to Cloudflare sync service',
-            available: false
+            available: false,
+            baseUrl: process.env.CLOUDFLARE_BASE_URL || null
         });
     }
 });
@@ -6255,29 +3790,116 @@ app.post('/api/cloudflare/process-queue', async (req, res) => {
 // Setup backup routes - will be set up when account is initialized
 let backupRoutesSetup = false;
 function setupBackupRoutesForAccount() {
-    if (!accountPaths) {
-        console.log('[BACKUP] Account paths not initialized, skipping backup routes setup');
-        return;
-    }
     if (backupRoutesSetup) {
-        console.log('[BACKUP] Backup routes already setup, skipping duplicate setup');
+        console.log('[BACKUP] Routes already setup, skipping duplicate setup');
         return;
     }
     try {
-        setupBackupRoutes(
-            app, 
-            client, 
-            () => ready, 
-            accountPaths.backupsDir, 
-            accountPaths.backupListFile, 
-            readJson, 
-            writeJson, 
-            accountPaths.detectedChannelsFile
-        );
+        // Setup backup routes (only if account paths are available)
+        if (accountPaths) {
+            setupBackupRoutes(
+                app, 
+                client, 
+                () => ready, 
+                accountPaths.backupsDir, 
+                accountPaths.backupListFile, 
+                readJson, 
+                writeJson, 
+                accountPaths.detectedChannelsFile
+            );
+            const currentAccountNumber = accountPathsModule.getCurrentAccountNumber();
+            console.log('[BACKUP] Backup routes setup for account:', currentAccountNumber);
+        } else {
+            console.log('[BACKUP] Account paths not initialized, backup routes will use default paths');
+        }
+        
+        const currentAccountNumber = accountPaths ? accountPathsModule.getCurrentAccountNumber() : 'default';
+        
+        // Setup templates routes (always, with fallback to default paths)
+        setupTemplatesRoutes(app, {
+            readJson,
+            writeJson,
+            getAccountPaths: () => accountPaths,
+            TEMPLATES_FILE,
+            templateUpload
+        });
+        console.log('[TEMPLATES] Templates routes setup for account:', currentAccountNumber);
+        
+        // Setup leads routes (always, with fallback to default paths)
+        setupLeadsRoutes(app, {
+            readJson,
+            writeJson,
+            getAccountPaths: () => accountPaths,
+            LEADS_FILE,
+            LEADS_CONFIG_FILE,
+            client,
+            getReady: () => ready,
+            callGenAI
+        });
+        console.log('[LEADS] Leads routes setup for account:', currentAccountNumber);
+        
+        // Setup contacts routes (always available)
+        setupContactsRoutes(app, {
+            client,
+            getReady: () => ready,
+            readJson,
+            writeJson,
+            getAccountPaths: () => accountPaths
+        });
+        console.log('[CONTACTS] Contacts routes setup for account:', currentAccountNumber);
+        
+        // Setup automations routes (always, with fallback to default paths)
+        setupAutomationRoutes(app, {
+            readJson,
+            writeJson,
+            getAccountPaths: () => accountPaths,
+            AUTOMATIONS_FILE,
+            client,
+            getReady: () => ready,
+            callGenAI,
+            readAutomations,
+            writeAutomations,
+            appendAutomationLog
+        });
+        console.log('[AUTOMATIONS] Automations routes setup for account:', currentAccountNumber);
+        
+        // Setup channels routes (always, with fallback to default paths)
+        setupChannelsRoutes(app, {
+            client,
+            getReady: () => ready,
+            readJson,
+            getAccountPaths: () => accountPaths,
+            DETECTED_CHANNELS_FILE,
+            messageUpload,
+            appendSentMessageLog,
+            addDetectedChannel,
+            getDetectedChannels,
+            discoverChannels
+        });
+        console.log('[CHANNELS] Channels routes setup for account:', currentAccountNumber);
+        
+        // Setup bulk routes (always, with fallback to default paths)
+        setupBulkRoutes(app, {
+            readJson,
+            writeJson,
+            getAccountPaths: () => accountPaths,
+            BULK_FILE,
+            client,
+            getReady: () => ready,
+            csvUpload,
+            retryOperation
+        });
+        console.log('[BULK] Bulk routes setup for account:', currentAccountNumber);
+        
+        // Setup media routes (always available)
+        setupMediaRoutes(app, {
+            upload
+        });
+        console.log('[MEDIA] Media routes setup for account:', currentAccountNumber);
+        
         backupRoutesSetup = true;
-        console.log('[BACKUP] Backup routes setup for account:', currentAccountNumber);
     } catch (error) {
-        console.error('[BACKUP] Error setting up backup routes:', error);
+        console.error('[BACKUP] Error setting up routes:', error);
     }
 }
 

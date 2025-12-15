@@ -98,89 +98,81 @@ async function loadChannels() {
     channelSendForm.classList.add('hidden');
     selectedChannel = null;
     
+    // Show loading state
+    channelList.innerHTML = '<div class="text-gray-500 p-2">Loading channels...</div>';
+    
     try {
-        // Try multiple methods to get channels
-        const results = await Promise.allSettled([
-            // Method 1: Enhanced channels API (followed channels)
-            fetch('/api/channels/enhanced?method=followed').then(r => r.json()),
-            // Method 2: Newsletter channels
-            fetch('/api/channels/enhanced?method=newsletter').then(r => r.json()),
-            // Method 3: Detected channels from message stream
-            fetch('/api/detected-channels').then(r => r.json())
-        ]);
+        // STEP 1: Load cached channels IMMEDIATELY (no waiting)
         let allChannels = [];
-        let methodUsed = 'combined';
-        
-        // Process followed channels
-        if (results[0].status === 'fulfilled') {
-            const followedData = results[0].value;
-            if (followedData.channels) {
-                allChannels = allChannels.concat(followedData.channels);
-            }
+        try {
+            const cachedResult = await fetch('/api/detected-channels').then(r => r.json());
+            allChannels = cachedResult.channels || [];
+        } catch (e) {
+            console.log('[CHANNELS] No cached channels available');
         }
         
-        // Process newsletter channels
-        if (results[1].status === 'fulfilled') {
-            const newsletterData = results[1].value;
-            if (newsletterData.channels) {
-                allChannels = allChannels.concat(newsletterData.channels);
-            }
+        // Immediately show cached channels (don't wait for fresh data)
+        if (allChannels.length > 0) {
+            channels = allChannels;
+            window.channels = channels;
+            filterChannels(); // Render immediately with cached data
         }
         
-        // Process detected channels
-        if (results[2].status === 'fulfilled') {
-            const detectedData = results[2].value;
-            if (detectedData.channels) {
-                allChannels = allChannels.concat(detectedData.channels);
-            }
-        }
-        
-        // Remove duplicates based on channel ID
-        // When merging, prefer isReadOnly from 'followed' method (most reliable)
-        const uniqueChannels = allChannels.reduce((acc, channel) => {
-            const existingIndex = acc.findIndex(ch => ch.id === channel.id);
-            if (existingIndex === -1) {
-                acc.push(channel);
-            } else {
-                // Merge data, but preserve isReadOnly from followed channels (more reliable)
-                const existing = acc[existingIndex];
-                const isFollowedChannel = channel.type === 'followed';
-                const existingIsFollowed = existing.type === 'followed';
-                
-                // If new channel is from 'followed' method, use its isReadOnly
-                // Otherwise, keep existing isReadOnly if it came from 'followed'
-                const mergedChannel = { ...existing, ...channel };
-                if (isFollowedChannel && existingIsFollowed) {
-                    // Both are followed, use the new one (more recent)
-                    mergedChannel.isReadOnly = channel.isReadOnly;
-                } else if (isFollowedChannel && !existingIsFollowed) {
-                    // New is followed, existing is not - use new isReadOnly
-                    mergedChannel.isReadOnly = channel.isReadOnly;
-                } else if (!isFollowedChannel && existingIsFollowed) {
-                    // Existing is followed, new is not - keep existing isReadOnly
-                    mergedChannel.isReadOnly = existing.isReadOnly;
-                }
-                // If neither is followed, keep the existing isReadOnly
-                
-                acc[existingIndex] = mergedChannel;
-            }
-            return acc;
-        }, []);
-        
-        channels = uniqueChannels;
-        window.channels = channels; // Update global reference
-        
-        // Verify and update channel statuses for all channels (batch verify)
-        await verifyAllChannelStatuses();
-        
-        // Apply filter and render (filterChannels will call renderChannelList)
-        filterChannels();
+        // STEP 2: Fetch fresh data in background (non-blocking)
+        fetchFreshChannelData().catch(err => {
+            console.error('[CHANNELS] Background fetch failed:', err);
+        });
         
         // Update global filteredChannels reference
         window.filteredChannels = filteredChannels;
     } catch (err) {
         console.error('Failed to load channels:', err);
         channelList.innerHTML = `<div class='text-red-600 p-2'>Failed to load channels: ${err.message}</div>`;
+    }
+}
+
+// Fetch fresh channel data from WhatsApp (background, non-blocking)
+async function fetchFreshChannelData() {
+    try {
+        const results = await Promise.allSettled([
+            fetch('/api/channels/enhanced?method=followed').then(r => r.json()).catch(() => null),
+            fetch('/api/channels/enhanced?method=newsletter').then(r => r.json()).catch(() => null)
+        ]);
+        
+        let allChannels = [...channels]; // Start with current channels
+        
+        // Process followed channels
+        if (results[0].status === 'fulfilled' && results[0].value && results[0].value.channels) {
+            results[0].value.channels.forEach(freshChannel => {
+                const existingIndex = allChannels.findIndex(ch => ch.id === freshChannel.id);
+                if (existingIndex !== -1) {
+                    allChannels[existingIndex] = { ...allChannels[existingIndex], ...freshChannel, cached: false };
+                } else {
+                    allChannels.push(freshChannel);
+                }
+            });
+        }
+        
+        // Process newsletter channels
+        if (results[1].status === 'fulfilled' && results[1].value && results[1].value.channels) {
+            results[1].value.channels.forEach(freshChannel => {
+                const existingIndex = allChannels.findIndex(ch => ch.id === freshChannel.id);
+                if (existingIndex !== -1) {
+                    allChannels[existingIndex] = { ...allChannels[existingIndex], ...freshChannel, cached: false };
+                } else {
+                    allChannels.push(freshChannel);
+                }
+            });
+        }
+        
+        // Update channels and re-render if we got fresh data
+        if (allChannels.length > channels.length) {
+            channels = allChannels;
+            window.channels = channels;
+            filterChannels();
+        }
+    } catch (err) {
+        console.error('[CHANNELS] Fresh data fetch failed:', err);
     }
 }
 
@@ -407,28 +399,32 @@ async function selectChannel(channelId) {
     }
 }
 
-// Verify all channel statuses from server (batch operation)
+// Verify channel statuses from server (only unverified channels, limited batch)
 async function verifyAllChannelStatuses() {
-    // Verify channels in batches to avoid overwhelming the server
-    const batchSize = 5;
-    for (let i = 0; i < channels.length; i += batchSize) {
-        const batch = channels.slice(i, i + batchSize);
-        await Promise.allSettled(
-            batch.map(async (channel) => {
-                try {
-                    const response = await fetch(`/api/channels/${encodeURIComponent(channel.id)}/verify`);
-                    if (response.ok) {
-                        const data = await response.json();
-                        // Update channel with verified status
-                        channel.isReadOnly = data.isReadOnly;
-                    }
-                } catch (error) {
-                    console.error(`[CHANNELS] Failed to verify channel ${channel.id}:`, error);
-                    // Keep existing status if verification fails
+    // Only verify channels that don't have verified status yet
+    // and limit to first 10 to avoid blocking
+    const unverifiedChannels = channels
+        .filter(ch => ch.isReadOnly === undefined || ch.verified !== true)
+        .slice(0, 10);
+    
+    if (unverifiedChannels.length === 0) return;
+    
+    // Verify in parallel with small batch
+    await Promise.allSettled(
+        unverifiedChannels.map(async (channel) => {
+            try {
+                const response = await fetch(`/api/channels/${encodeURIComponent(channel.id)}/verify`);
+                if (response.ok) {
+                    const data = await response.json();
+                    // Update channel with verified status
+                    channel.isReadOnly = data.isReadOnly;
+                    channel.verified = true;
                 }
-            })
-        );
-    }
+            } catch (error) {
+                // Silently ignore - don't spam console
+            }
+        })
+    );
 }
 
 // Update channel status badge in the list
