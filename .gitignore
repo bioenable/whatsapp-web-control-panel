@@ -229,4 +229,4 @@ Thumbs.db
 # Cloudflare
 .wrangler/
 
-# External dependencies are now managed by npm
+# External dependencies are now managed by npmbackups/

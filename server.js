@@ -26,8 +26,8 @@ const LEADS_FILE = null; // DEPRECATED: Use accountPaths.leadsFile
 const LEADS_CONFIG_FILE = null; // DEPRECATED: Use accountPaths.leadsConfigFile
 const CLOUDFLARE_LOGS_FILE = null; // DEPRECATED: Use accountPaths.cloudflareLogsFile
 const CLOUDFLARE_MESSAGES_FILE = null; // DEPRECATED: Use accountPaths.cloudflareMessagesFile
-const BACKUP_DIR = path.join(__dirname, 'backups');
-const BACKUP_LIST_FILE = path.join(__dirname, 'backup_list.json');
+const BACKUP_DIR = null; // DEPRECATED: Use accountPaths.backupsDir
+const BACKUP_LIST_FILE = null; // DEPRECATED: Use accountPaths.backupListFile
 const { setupBackupRoutes } = require('./backup.js');
 const { setupTemplatesRoutes } = require('./src/routes/templates.js');
 const { setupLeadsRoutes } = require('./src/routes/leads.js');
@@ -39,7 +39,7 @@ const { setupMediaRoutes } = require('./src/routes/media.js');
 const fetch = require('node-fetch'); // Add at the top with other requires
 const TEMPLATE_MEDIA_DIR = path.join(__dirname, 'public', 'message-templates');
 if (!fs.existsSync(TEMPLATE_MEDIA_DIR)) fs.mkdirSync(TEMPLATE_MEDIA_DIR, { recursive: true });
-if (!fs.existsSync(BACKUP_DIR)) fs.mkdirSync(BACKUP_DIR, { recursive: true });
+// BACKUP_DIR is now created per-account in private-data folder via accountPaths
 const templateMediaUpload = multer({
     storage: multer.diskStorage({
         destination: (req, file, cb) => cb(null, TEMPLATE_MEDIA_DIR),
