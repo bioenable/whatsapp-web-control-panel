@@ -157,12 +157,12 @@ async function loadChannels(isBackgroundRefresh = false) {
     }
 }
 
-// Fetch fresh channel data from WhatsApp (background, non-blocking)
+// Fetch fresh channel data from WhatsApp (background, non-blocking, append-only)
 async function fetchFreshChannelData() {
     try {
-        console.log('[CHANNELS] Starting background sync...');
+        console.log('[CHANNELS] Starting background sync (append-only mode)...');
         
-        // First trigger server-side discovery (this updates the JSON)
+        // First trigger server-side discovery (this updates the JSON with append-only logic)
         try {
             await fetch('/api/channels/discover', { method: 'POST' });
             console.log('[CHANNELS] Server-side discovery triggered');
@@ -176,25 +176,45 @@ async function fetchFreshChannelData() {
             fetch('/api/channels/enhanced?method=newsletter').then(r => r.json()).catch(() => null)
         ]);
         
-        let allChannels = [...channels]; // Start with current channels
-        let hasUpdates = false;
+        let allChannels = [...channels]; // Start with current channels (append-only)
+        let newCount = 0;
+        let updatedCount = 0;
         
         // Process followed channels (IMPORTANT: these have accurate isReadOnly status)
         if (results[0].status === 'fulfilled' && results[0].value && results[0].value.channels) {
-            console.log(`[CHANNELS] Got ${results[0].value.channels.length} followed channels`);
+            console.log(`[CHANNELS] Got ${results[0].value.channels.length} followed channels from fresh request`);
             results[0].value.channels.forEach(freshChannel => {
                 const existingIndex = allChannels.findIndex(ch => ch.id === freshChannel.id);
                 if (existingIndex !== -1) {
-                    // Preserve selection state, update other fields
+                    // Update existing channel - PRESERVE admin status
+                    const existing = allChannels[existingIndex];
                     const wasSelected = selectedChannel && selectedChannel.id === freshChannel.id;
-                    allChannels[existingIndex] = { ...allChannels[existingIndex], ...freshChannel, cached: false };
+                    
+                    // CRITICAL: Preserve admin status (isReadOnly: false)
+                    // Only update to admin if fresh confirms admin, never downgrade
+                    let finalIsReadOnly = existing.isReadOnly;
+                    if (freshChannel.isReadOnly === false) {
+                        finalIsReadOnly = false; // Fresh confirms admin
+                    } else if (existing.isReadOnly === false) {
+                        finalIsReadOnly = false; // Preserve existing admin status
+                    }
+                    
+                    allChannels[existingIndex] = { 
+                        ...existing, 
+                        ...freshChannel, 
+                        isReadOnly: finalIsReadOnly,
+                        type: finalIsReadOnly === false ? 'admin' : freshChannel.type,
+                        cached: false 
+                    };
+                    
                     if (wasSelected) {
                         selectedChannel = allChannels[existingIndex];
                     }
-                    hasUpdates = true;
+                    updatedCount++;
                 } else {
+                    // New channel - append
                     allChannels.push(freshChannel);
-                    hasUpdates = true;
+                    newCount++;
                 }
             });
         }
@@ -205,32 +225,49 @@ async function fetchFreshChannelData() {
             results[1].value.channels.forEach(freshChannel => {
                 const existingIndex = allChannels.findIndex(ch => ch.id === freshChannel.id);
                 if (existingIndex !== -1) {
-                    allChannels[existingIndex] = { ...allChannels[existingIndex], ...freshChannel, cached: false };
-                    hasUpdates = true;
+                    // Update existing - preserve admin status
+                    const existing = allChannels[existingIndex];
+                    let finalIsReadOnly = existing.isReadOnly;
+                    if (freshChannel.isReadOnly === false) {
+                        finalIsReadOnly = false;
+                    } else if (existing.isReadOnly === false) {
+                        finalIsReadOnly = false;
+                    }
+                    
+                    allChannels[existingIndex] = { 
+                        ...existing, 
+                        ...freshChannel, 
+                        isReadOnly: finalIsReadOnly,
+                        type: finalIsReadOnly === false ? 'admin' : freshChannel.type,
+                        cached: false 
+                    };
+                    updatedCount++;
                 } else {
+                    // New channel - append
                     allChannels.push(freshChannel);
-                    hasUpdates = true;
+                    newCount++;
                 }
             });
         }
         
-        // Update channels and re-render only if we have updates
-        if (hasUpdates) {
+        // Update channels and re-render
+        if (newCount > 0 || updatedCount > 0) {
             channels = allChannels;
             window.channels = channels;
-            filterChannels(); // Re-render with fresh data
-            console.log(`[CHANNELS] Updated to ${channels.length} channels`);
+            filterChannels(); // Re-render with updated data
+            console.log(`[CHANNELS] Sync complete: ${newCount} new, ${updatedCount} updated. Total: ${channels.length}`);
         }
         
-        // Reload from cache to ensure we have the latest JSON data
+        // Reload from server cache to get the authoritative list (includes all appended channels)
         setTimeout(async () => {
             try {
                 const cachedResult = await fetch('/api/detected-channels').then(r => r.json());
                 if (cachedResult.channels && cachedResult.channels.length > 0) {
+                    // Merge with current - server has the authoritative list
                     channels = cachedResult.channels;
                     window.channels = channels;
                     filterChannels();
-                    console.log(`[CHANNELS] Reloaded ${channels.length} channels from updated cache`);
+                    console.log(`[CHANNELS] Loaded ${channels.length} channels from server cache`);
                 }
             } catch (e) {
                 // Ignore cache reload errors

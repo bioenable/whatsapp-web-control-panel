@@ -2139,9 +2139,33 @@ function addDetectedChannel(channelId, channelInfo = {}) {
         // Check if channel already exists
         const existingIndex = channels.findIndex(ch => ch.id === channelId);
         const now = new Date().toISOString();
+        
         if (existingIndex !== -1) {
-            // Update existing channel - preserve important fields, update others
+            // Update existing channel - PRESERVE ADMIN STATUS
             const existing = channels[existingIndex];
+            
+            // CRITICAL: Preserve admin status (isReadOnly: false) unless:
+            // 1. Fresh data explicitly confirms admin (isReadOnly: false) - keep it
+            // 2. Fresh data says read-only AND it was verified - update it
+            // 3. Existing was admin - NEVER downgrade to read-only (fresh data may be incomplete)
+            let finalIsReadOnly = existing.isReadOnly;
+            let finalType = existing.type;
+            
+            if (channelInfo.isReadOnly === false) {
+                // Fresh data confirms admin - definitely admin
+                finalIsReadOnly = false;
+                finalType = 'admin';
+            } else if (existing.isReadOnly === false) {
+                // Existing is admin - PRESERVE admin status (don't downgrade)
+                finalIsReadOnly = false;
+                finalType = 'admin';
+            } else if (channelInfo.isReadOnly === true && channelInfo.verified) {
+                // Fresh verified data says read-only - update it
+                finalIsReadOnly = true;
+                finalType = 'subscriber';
+            }
+            // Otherwise keep existing status
+            
             channels[existingIndex] = {
                 ...existing,
                 ...channelInfo,
@@ -2151,22 +2175,18 @@ function addDetectedChannel(channelId, channelInfo = {}) {
                 lastSeen: now,
                 // Increment message count only if not a sync operation
                 messageCount: channelInfo.verified ? existing.messageCount || 0 : (existing.messageCount || 0) + 1,
-                // CRITICAL: If isReadOnly is explicitly provided, use it (for admin status)
-                isReadOnly: channelInfo.isReadOnly !== undefined ? channelInfo.isReadOnly : existing.isReadOnly,
-                // Update type based on isReadOnly if provided
-                type: channelInfo.isReadOnly !== undefined 
-                    ? (channelInfo.isReadOnly ? 'subscriber' : 'admin')
-                    : (channelInfo.type || existing.type || 'unknown')
+                // Use calculated admin status
+                isReadOnly: finalIsReadOnly,
+                type: finalType
             };
         } else {
             // Add new channel
+            const isAdmin = channelInfo.isReadOnly === false;
             channels.push({
                 id: channelId,
                 name: channelInfo.name || channelId,
-                type: channelInfo.isReadOnly !== undefined 
-                    ? (channelInfo.isReadOnly ? 'subscriber' : 'admin')
-                    : (channelInfo.type || 'unknown'),
-                isReadOnly: channelInfo.isReadOnly !== undefined ? channelInfo.isReadOnly : true, // Default to read-only
+                type: isAdmin ? 'admin' : (channelInfo.type || 'subscriber'),
+                isReadOnly: channelInfo.isReadOnly !== undefined ? channelInfo.isReadOnly : true, // Default to read-only for new
                 isNewsletter: channelId.endsWith('@newsletter'),
                 isBroadcast: channelId === 'status@broadcast',
                 firstSeen: now,
@@ -2175,15 +2195,18 @@ function addDetectedChannel(channelId, channelInfo = {}) {
                 ...channelInfo
             });
         }
-        // Keep only the latest 1000 channels
-        if (channels.length > 1000) {
-            channels = channels.slice(-1000);
+        
+        // Keep only the latest 2000 channels (increased limit for append-only mode)
+        if (channels.length > 2000) {
+            // Sort by lastSeen and keep the most recent
+            channels.sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+            channels = channels.slice(0, 2000);
         }
         
         const writeSuccess = writeJson(accountPaths.detectedChannelsFile, channels);
         if (writeSuccess) {
-            const isAdmin = channelInfo.isReadOnly === false;
-            console.log(`[CHANNEL] Added/Updated detected channel: ${channelId} (${isAdmin ? 'ADMIN' : 'subscriber'})`);
+            const isAdmin = channels[existingIndex !== -1 ? existingIndex : channels.length - 1]?.isReadOnly === false;
+            console.log(`[CHANNEL] Added/Updated detected channel: ${channelInfo.name || channelId} (${isAdmin ? 'ADMIN' : 'subscriber'})`);
         } else {
             console.log(`[CHANNEL] Failed to save channel data due to disk space: ${channelId}`);
         }
@@ -2207,75 +2230,55 @@ async function discoverChannels() {
     if (!ready) return;
     
     try {
-        console.log('[CHANNEL-DISCOVERY] Starting proactive channel discovery (with sync)...');
+        console.log('[CHANNEL-DISCOVERY] Starting proactive channel discovery (append-only mode)...');
         
         // Method 1: Get followed channels from WhatsApp
         const chats = await client.getChats();
         const followedChannels = chats.filter(chat => chat.isChannel);
         
-        console.log(`[CHANNEL-DISCOVERY] Found ${followedChannels.length} channels in WhatsApp`);
-        
-        // SAFETY CHECK: If WhatsApp returns 0 channels, don't sync (likely a temporary issue)
-        if (followedChannels.length === 0) {
-            console.log('[CHANNEL-DISCOVERY] WARNING: WhatsApp returned 0 channels - skipping sync to preserve cache');
-            return;
-        }
-        
-        // Create a set of current WhatsApp channel IDs for sync
-        const waChannelIds = new Set(followedChannels.map(ch => ch.id._serialized));
+        console.log(`[CHANNEL-DISCOVERY] Found ${followedChannels.length} channels in current WhatsApp response`);
         
         // Get existing cached channels
         const existingChannels = getDetectedChannels();
         console.log(`[CHANNEL-DISCOVERY] Existing cached channels: ${existingChannels.length}`);
         
-        // Track admin vs readonly for logging
+        // Track stats for logging
+        let newCount = 0;
+        let updatedCount = 0;
         let adminCount = 0;
-        let readOnlyCount = 0;
         
-        // Update/Add all WhatsApp channels to cache
+        // APPEND-ONLY: Add/update channels from WhatsApp response (never remove)
         for (const channel of followedChannels) {
+            const channelId = channel.id._serialized;
             const isAdmin = !channel.isReadOnly;
-            if (isAdmin) adminCount++;
-            else readOnlyCount++;
             
-            addDetectedChannel(channel.id._serialized, {
+            // Check if channel already exists in cache
+            const existingChannel = existingChannels.find(ch => ch.id === channelId);
+            
+            if (!existingChannel) {
+                // New channel - add it
+                newCount++;
+                if (isAdmin) adminCount++;
+            } else {
+                updatedCount++;
+                // Existing channel - check admin status
+                if (isAdmin) adminCount++;
+            }
+            
+            // Add/update channel - the addDetectedChannel function handles admin status preservation
+            addDetectedChannel(channelId, {
                 name: channel.name,
                 type: isAdmin ? 'admin' : 'subscriber',
-                isReadOnly: channel.isReadOnly,  // CRITICAL: Save admin status
-                isNewsletter: channel.id._serialized.endsWith('@newsletter'),
-                isBroadcast: channel.id._serialized === 'status@broadcast',
+                isReadOnly: channel.isReadOnly,
+                isNewsletter: channelId.endsWith('@newsletter'),
+                isBroadcast: channelId === 'status@broadcast',
                 lastSeen: new Date().toISOString(),
                 verified: true,
                 verifiedAt: new Date().toISOString()
             });
         }
         
-        // SYNC: Remove channels that are no longer in WhatsApp
-        // But only if we have a significant number of channels from WhatsApp
-        // to avoid accidental data loss from temporary API failures
-        let removedCount = 0;
-        if (followedChannels.length >= 1 && existingChannels.length > 0) {
-            const channelsToKeep = existingChannels.filter(cachedChannel => {
-                if (waChannelIds.has(cachedChannel.id)) {
-                    return true; // Keep - still in WhatsApp
-                } else {
-                    console.log(`[CHANNEL-DISCOVERY] Removing unfollowed channel: ${cachedChannel.name || cachedChannel.id}`);
-                    removedCount++;
-                    return false; // Remove - no longer in WhatsApp
-                }
-            });
-            
-            // If we removed any channels, save the updated list
-            if (removedCount > 0 && accountPaths && accountPaths.detectedChannelsFile) {
-                // Re-read to get latest state (including newly added channels)
-                const updatedChannels = getDetectedChannels();
-                const finalChannels = updatedChannels.filter(ch => waChannelIds.has(ch.id));
-                writeJson(accountPaths.detectedChannelsFile, finalChannels);
-                console.log(`[CHANNEL-DISCOVERY] Removed ${removedCount} unfollowed channels from cache`);
-            }
-        }
-        
-        // Method 2: Try to get newsletter collection for additional metadata
+        // Method 2: Try to get newsletter collection for additional channels
         try {
             const newsletterChannels = await client.pupPage.evaluate(async () => {
                 try {
@@ -2293,25 +2296,29 @@ async function discoverChannels() {
                 }
             });
             
-            // Update newsletter channels with additional metadata
+            // Add any newsletter channels not already in our list
             for (const newsletter of newsletterChannels) {
-                if (waChannelIds.has(newsletter.id)) {
-                    // Only update if it's a channel we're following
-                    addDetectedChannel(newsletter.id, {
-                        name: newsletter.name,
-                        description: newsletter.description,
-                        type: 'newsletter',
-                        isNewsletter: true,
-                        isBroadcast: false,
-                        lastSeen: new Date().toISOString()
-                    });
+                const existingChannel = existingChannels.find(ch => ch.id === newsletter.id);
+                if (!existingChannel) {
+                    newCount++;
                 }
+                
+                addDetectedChannel(newsletter.id, {
+                    name: newsletter.name,
+                    description: newsletter.description,
+                    type: 'newsletter',
+                    isNewsletter: true,
+                    isBroadcast: false,
+                    lastSeen: new Date().toISOString()
+                });
             }
         } catch (error) {
             console.log('[CHANNEL-DISCOVERY] Newsletter collection not accessible:', error.message);
         }
         
-        console.log(`[CHANNEL-DISCOVERY] Sync complete: ${followedChannels.length} channels (${adminCount} admin, ${readOnlyCount} read-only), removed ${removedCount} unfollowed`);
+        // Get final count
+        const finalChannels = getDetectedChannels();
+        console.log(`[CHANNEL-DISCOVERY] Complete: ${newCount} new, ${updatedCount} updated, ${adminCount} admin. Total: ${finalChannels.length} channels`);
         
     } catch (error) {
         console.error('[CHANNEL-DISCOVERY] Error during channel discovery:', error);
