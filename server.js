@@ -2503,7 +2503,12 @@ async function discoverChannels() {
         console.log(`[CHANNEL-DISCOVERY] Complete: ${newCount} new, ${updatedCount} updated, ${adminCount} admin. Total: ${finalChannels.length} channels`);
         
     } catch (error) {
-        console.error('[CHANNEL-DISCOVERY] Error during channel discovery:', error);
+        // Log error but don't treat it as critical - getChats() may fail temporarily
+        if (error.message && error.message.includes('getChats')) {
+            console.warn('[CHANNEL-DISCOVERY] getChats() temporarily unavailable, will retry on next cycle');
+        } else {
+            console.error('[CHANNEL-DISCOVERY] Error during channel discovery:', error.message || error);
+        }
     }
 }
 

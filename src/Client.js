@@ -857,8 +857,16 @@ class Client extends EventEmitter {
         } else {
             this.pupPage.on('response', async (res) => {
                 if(res.ok() && res.url() === WhatsWebURL) {
-                    const indexHtml = await res.text();
-                    this.currentIndexHtml = indexHtml;
+                    try {
+                        const indexHtml = await res.text();
+                        this.currentIndexHtml = indexHtml;
+                    } catch (error) {
+                        // Ignore errors for preflight requests or requests without body
+                        if (error.message && !error.message.includes('preflight')) {
+                            // Only log non-preflight errors
+                            console.warn('[CLIENT] Failed to read response text:', error.message);
+                        }
+                    }
                 }
             });
         }
@@ -1136,11 +1144,23 @@ class Client extends EventEmitter {
      * @returns {Promise<Array<Chat>>}
      */
     async getChats() {
-        const chats = await this.pupPage.evaluate(async () => {
-            return await window.WWebJS.getChats();
-        });
+        try {
+            const chats = await this.pupPage.evaluate(async () => {
+                if (!window.WWebJS || typeof window.WWebJS.getChats !== 'function') {
+                    throw new Error('WWebJS.getChats is not available');
+                }
+                return await window.WWebJS.getChats();
+            });
 
-        return chats.map(chat => ChatFactory.create(this, chat));
+            if (!chats || !Array.isArray(chats)) {
+                return [];
+            }
+
+            return chats.map(chat => ChatFactory.create(this, chat));
+        } catch (error) {
+            console.warn('[CLIENT] getChats() failed:', error.message);
+            return [];
+        }
     }
 
     /**
