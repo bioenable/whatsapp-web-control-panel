@@ -67,7 +67,58 @@ console.log(`[CONFIG] CLOUDFLARE_BASE_URL: ${process.env.CLOUDFLARE_BASE_URL ? '
 console.log(`[CONFIG] CLOUDFLARE_API_KEY: ${process.env.CLOUDFLARE_API_KEY ? 'Set' : 'Not set'}`);
 console.log(`[CONFIG] LEADS_API_URL: ${process.env.LEADS_API_URL ? 'Set' : 'Not set'}`);
 console.log(`[CONFIG] LEADS_API_KEY: ${process.env.LEADS_API_KEY ? 'Set' : 'Not set'}`);
+console.log(`[CONFIG] MESSAGE_EXPIRY_HOURS: ${process.env.MESSAGE_EXPIRY_HOURS || '24 (default)'}`);
+console.log(`[CONFIG] MESSAGES_PER_MINUTE: ${process.env.MESSAGES_PER_MINUTE || '2 (default)'}`);
 const GOOGLE_MODEL = process.env.GOOGLE_MODEL || 'gemini-2.0-flash';
+
+// Rate limiting for Cloudflare queue processing
+// Tracks message send timestamps to enforce rate limits
+const rateLimiter = {
+  sentTimestamps: [], // Array of timestamps when messages were sent
+  getMessagesPerMinute: () => parseInt(process.env.MESSAGES_PER_MINUTE) || 2,
+  
+  // Clean up timestamps older than 1 minute
+  cleanOldTimestamps() {
+    const oneMinuteAgo = Date.now() - 60000;
+    this.sentTimestamps = this.sentTimestamps.filter(ts => ts > oneMinuteAgo);
+  },
+  
+  // Check how many messages can be sent right now
+  getAvailableSlots() {
+    this.cleanOldTimestamps();
+    const maxPerMinute = this.getMessagesPerMinute();
+    return Math.max(0, maxPerMinute - this.sentTimestamps.length);
+  },
+  
+  // Record a message being sent
+  recordSent() {
+    this.sentTimestamps.push(Date.now());
+  },
+  
+  // Get time until next slot is available (in ms)
+  getTimeUntilNextSlot() {
+    this.cleanOldTimestamps();
+    const maxPerMinute = this.getMessagesPerMinute();
+    if (this.sentTimestamps.length < maxPerMinute) {
+      return 0;
+    }
+    // Find the oldest timestamp and calculate when it expires
+    const oldestTimestamp = Math.min(...this.sentTimestamps);
+    return Math.max(0, (oldestTimestamp + 60000) - Date.now());
+  },
+  
+  // Get current rate limit stats
+  getStats() {
+    this.cleanOldTimestamps();
+    const maxPerMinute = this.getMessagesPerMinute();
+    return {
+      messagesPerMinute: maxPerMinute,
+      sentInLastMinute: this.sentTimestamps.length,
+      availableSlots: Math.max(0, maxPerMinute - this.sentTimestamps.length),
+      timeUntilNextSlot: this.getTimeUntilNextSlot()
+    };
+  }
+};
 const AUTOMATIONS_FILE = path.join(__dirname, 'automations.json');
 const cron = require('node-cron');
 const { GoogleGenAI } = require('@google/genai');
@@ -748,16 +799,21 @@ async function ensureContactExists(chatId, contactName) {
   }
 }
 
-// Process queued messages from Cloudflare
+// Process queued messages from Cloudflare (with rate limiting)
 async function processQueuedMessages() {
   if (!cloudflareClient || !cloudflareClient.isConnected || !client) {
     // Silently return if Cloudflare is not available
     return;
   }
-  
+  // User info is only set when client emits 'ready' (after QR login completes fully).
+  // If we're still authenticated-but-not-ready, skip silently (no log spam).
+  if (!ready) {
+    return;
+  }
   try {
     const userInfo = getUserIdentifier();
     if (!userInfo) {
+      // Unexpected: we're ready but no user info (e.g. client.info missing)
       console.log('[CLOUDFLARE] No user info available, skipping message processing');
       return;
     }
@@ -769,11 +825,95 @@ async function processQueuedMessages() {
       return; // Skip processing if no messages
     }
     
+    // Get configurable expiry time (default: 24 hours, 0 = no expiry)
+    const MESSAGE_EXPIRY_HOURS = parseInt(process.env.MESSAGE_EXPIRY_HOURS) || 24;
+    const now = new Date();
+    const expiryThreshold = new Date(now.getTime() - (MESSAGE_EXPIRY_HOURS * 60 * 60 * 1000));
+    
+    // Check rate limit - how many messages can we send this cycle
+    const availableSlots = rateLimiter.getAvailableSlots();
+    const rateLimitStats = rateLimiter.getStats();
+    
+    if (availableSlots === 0) {
+      const waitTime = Math.ceil(rateLimitStats.timeUntilNextSlot / 1000);
+      console.log(`[CLOUDFLARE] Rate limit reached (${rateLimitStats.messagesPerMinute}/min). ${queuedMessages.length} messages waiting. Next slot in ${waitTime}s`);
+      return; // Will be processed in next cycle
+    }
+    
+    console.log(`[CLOUDFLARE] Processing queue: ${queuedMessages.length} pending, ${availableSlots} slots available (limit: ${rateLimitStats.messagesPerMinute}/min)`);
+    
     const processedMessages = [];
+    let expiredCount = 0;
+    let sentCount = 0;
+    let failedCount = 0;
+    let rejectedCount = 0;
+    let rateLimitedCount = 0;
 
     for (const queuedMsg of queuedMessages) {
       try {
         console.log(`[CLOUDFLARE] Processing queued message: ${queuedMsg.id} for user: ${userInfo.id}`);
+        
+        // EXPIRY CHECK 1: Check if message has explicit expiry time
+        if (queuedMsg.expiresAt) {
+          const expiresAt = new Date(queuedMsg.expiresAt);
+          if (expiresAt < now) {
+            console.log(`[CLOUDFLARE] Message ${queuedMsg.id} expired at ${queuedMsg.expiresAt}`);
+            
+            processedMessages.push({
+              id: queuedMsg.id,
+              status: 'expired',
+              expiredAt: now.toISOString(),
+              error: 'Message expired before processing (explicit expiry)'
+            });
+            
+            // Track expired message
+            appendCloudflareMessage({
+              queueId: queuedMsg.id,
+              to: queuedMsg.to,
+              message: queuedMsg.message,
+              status: 'expired',
+              error: `Message expired at ${queuedMsg.expiresAt}`,
+              expiredAt: now.toISOString(),
+              originalExpiresAt: queuedMsg.expiresAt
+            });
+            
+            expiredCount++;
+            continue;
+          }
+        }
+        
+        // EXPIRY CHECK 2: Check if message is older than default expiry (if no explicit expiry and expiry is enabled)
+        if (MESSAGE_EXPIRY_HOURS > 0 && !queuedMsg.expiresAt) {
+          const messageTime = queuedMsg.createdAt ? new Date(queuedMsg.createdAt) : 
+                             (queuedMsg.timestamp ? new Date(queuedMsg.timestamp * 1000) : 
+                             (queuedMsg.queuedAt ? new Date(queuedMsg.queuedAt) : null));
+          
+          if (messageTime && messageTime < expiryThreshold) {
+            const ageHours = Math.round((now.getTime() - messageTime.getTime()) / (1000 * 60 * 60));
+            console.log(`[CLOUDFLARE] Message ${queuedMsg.id} is ${ageHours} hours old, exceeds ${MESSAGE_EXPIRY_HOURS} hour limit`);
+            
+            processedMessages.push({
+              id: queuedMsg.id,
+              status: 'expired',
+              expiredAt: now.toISOString(),
+              error: `Message older than ${MESSAGE_EXPIRY_HOURS} hours (${ageHours}h old)`
+            });
+            
+            // Track expired message
+            appendCloudflareMessage({
+              queueId: queuedMsg.id,
+              to: queuedMsg.to,
+              message: queuedMsg.message,
+              status: 'expired',
+              error: `Message was ${ageHours} hours old, limit is ${MESSAGE_EXPIRY_HOURS} hours`,
+              expiredAt: now.toISOString(),
+              messageAge: ageHours
+            });
+            
+            expiredCount++;
+            continue;
+          }
+        }
         
         // SECURITY VALIDATION: Check if the from field matches the logged-in user
         if (queuedMsg.from && queuedMsg.from !== userInfo.id) {
@@ -783,10 +923,31 @@ async function processQueuedMessages() {
           processedMessages.push({
             id: queuedMsg.id,
             status: 'rejected',
-            rejectedAt: new Date().toISOString(),
+            rejectedAt: now.toISOString(),
             error: 'Security validation failed: from field does not match logged-in user'
           });
+          
+          // Track rejected message
+          appendCloudflareMessage({
+            queueId: queuedMsg.id,
+            to: queuedMsg.to,
+            message: queuedMsg.message,
+            status: 'rejected',
+            error: `Security rejection: from ${queuedMsg.from} != logged-in user ${userInfo.id}`,
+            rejectedAt: now.toISOString()
+          });
+          
+          rejectedCount++;
           continue; // Skip processing this message
+        }
+        
+        // RATE LIMIT CHECK: Check if we have slots available before sending
+        const currentSlots = rateLimiter.getAvailableSlots();
+        if (currentSlots === 0) {
+          // Stop processing - remaining messages will be processed in next cycle
+          rateLimitedCount = queuedMessages.length - (sentCount + expiredCount + failedCount + rejectedCount);
+          console.log(`[CLOUDFLARE] Rate limit reached during processing. ${rateLimitedCount} messages deferred to next cycle.`);
+          break;
         }
         
         // Check and create contact if needed
@@ -823,27 +984,40 @@ async function processQueuedMessages() {
           }
         }
         
-        const message = await client.sendMessage(chatId, queuedMsg.message, { media });
+        // Disable sendSeen to avoid "markedUnread" error on new/unloaded chats
+        const message = await client.sendMessage(chatId, queuedMsg.message, { media, sendSeen: false });
+        
+        // Check if message was sent successfully
+        if (!message || !message.id) {
+          throw new Error('Message send returned empty response - WhatsApp API may be unavailable');
+        }
+        
+        // Record this send for rate limiting
+        rateLimiter.recordSent();
+        
+        const messageId = message.id._serialized || message.id.id || String(message.id);
         
         processedMessages.push({
           id: queuedMsg.id,
           status: 'sent',
-          sentAt: new Date().toISOString(),
-          messageId: message.id._serialized
+          sentAt: now.toISOString(),
+          messageId: messageId
         });
         
         // Track message in Cloudflare messages log
         appendCloudflareMessage({
           queueId: queuedMsg.id,
-          messageId: message.id._serialized,
+          messageId: messageId,
           to: chatId,
+          contactName: contactName,
           message: queuedMsg.message,
           hasMedia: !!media,
           status: 'sent',
-          sentAt: new Date().toISOString()
+          sentAt: now.toISOString()
         });
         
-        console.log(`[CLOUDFLARE] Message sent successfully: ${queuedMsg.id}`);
+        sentCount++;
+        console.log(`[CLOUDFLARE] Message sent successfully: ${queuedMsg.id} (${sentCount} sent this cycle, ${rateLimiter.getAvailableSlots()} slots remaining)`);
       } catch (error) {
         console.error(`[CLOUDFLARE] Failed to send queued message ${queuedMsg.id}:`, error);
         
@@ -860,14 +1034,16 @@ async function processQueuedMessages() {
           message: queuedMsg.message,
           status: 'failed',
           error: error.message,
-          failedAt: new Date().toISOString()
+          failedAt: now.toISOString()
         });
+        
+        failedCount++;
       }
     }
 
     if (processedMessages.length > 0) {
       await cloudflareClient.processMessages(processedMessages, userInfo.id);
-        console.log(`[CLOUDFLARE] Processed ${processedMessages.length} queued messages for user: ${userInfo.id}`);
+      console.log(`[CLOUDFLARE] Processed ${processedMessages.length} queued messages for user: ${userInfo.id} (sent: ${sentCount}, expired: ${expiredCount}, failed: ${failedCount}, rejected: ${rejectedCount})`);
     }
   } catch (error) {
     console.error('[CLOUDFLARE] Queue processing error:', error);
@@ -1188,17 +1364,35 @@ async function checkAndKillPort(port) {
     const util = require('util');
     const execAsync = util.promisify(exec);
     
+    const currentPid = process.pid;
     const { stdout } = await execAsync(`lsof -t -i:${port}`);
-    if (stdout.trim()) {
-      console.log(`[PORT] Process found on port ${port}, killing it...`);
-      await execAsync(`kill -9 ${stdout.trim()}`);
-      console.log(`[PORT] Process killed successfully`);
-      // Wait a moment for the port to be released
-      await new Promise(resolve => setTimeout(resolve, 2000));
+    const pids = stdout.trim().split('\n').filter(pid => pid.trim());
+    
+    if (pids.length > 0) {
+      // Filter out current process to avoid killing ourselves
+      const otherPids = pids.filter(pid => pid.trim() !== String(currentPid));
+      
+      if (otherPids.length > 0) {
+        console.log(`[PORT] Process(es) found on port ${port}, killing: ${otherPids.join(', ')}`);
+        for (const pid of otherPids) {
+          try {
+            await execAsync(`kill -9 ${pid.trim()}`);
+            console.log(`[PORT] Process ${pid} killed successfully`);
+          } catch (killError) {
+            console.log(`[PORT] Could not kill process ${pid}: ${killError.message}`);
+          }
+        }
+        // Wait a moment for the port to be released
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      } else {
+        console.log(`[PORT] Port ${port} is in use by current process (${currentPid}), skipping kill`);
+      }
+    } else {
+      console.log(`[PORT] Port ${port} is available`);
     }
   } catch (error) {
     // Port is free or no process found
-    console.log(`[PORT] Port ${port} is available`);
+    console.log(`[PORT] Port ${port} is available (or check failed: ${error.message})`);
   }
 }
 
@@ -1264,12 +1458,13 @@ let currentUserInfo = null;
 
 // Function to get user identifier from WhatsApp client
 function getUserIdentifier() {
-    if (!currentUserInfo || !currentUserInfo.wid) {
-        return null;
-    }
+    // Prefer stored info, but fall back to live client.info (some sessions can be usable
+    // even if our local `ready` flag / handler didn't run).
+    const info = currentUserInfo || (client && client.info) || null;
+    if (!info || !info.wid) return null;
     
     // Use WhatsApp ID as unique identifier - simplified to only essential field
-    const userId = currentUserInfo.wid._serialized || currentUserInfo.wid;
+    const userId = info.wid._serialized || info.wid;
     
     return {
         id: userId
@@ -1277,10 +1472,21 @@ function getUserIdentifier() {
 }
 
 // Initialize WhatsApp client with improved configuration
+// For ARM Macs, try to use system Chrome if available
+const isArmMac = process.platform === 'darwin' && process.arch === 'arm64';
+const chromePath = isArmMac ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : undefined;
+
+if (isArmMac && chromePath && fs.existsSync(chromePath)) {
+    console.log('[CONFIG] Using system Chrome for ARM Mac compatibility');
+} else if (isArmMac) {
+    console.log('[CONFIG] ARM Mac detected but Chrome not found at expected path. Using bundled Chromium (may have compatibility issues).');
+}
+
 const client = new Client({
     authStrategy: new LocalAuth(),
     puppeteer: { 
         headless: false,
+        ...(chromePath && fs.existsSync(chromePath) && { executablePath: chromePath }),
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
@@ -1298,11 +1504,9 @@ const client = new Client({
         ],
         timeout: 120000, // Increase timeout to 2 minutes
         defaultViewport: { width: 1280, height: 720 }
-    },
-    webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
     }
+    // Note: webVersionCache removed - let library use current WhatsApp Web version
+    // The old remote URL (2.2412.54) is no longer available (404)
 });
 
 // State variables
@@ -1352,6 +1556,11 @@ client.on('ready', async () => {
         console.log('[USER] Warning: Could not detect user information');
     }
     try {
+        if (!client || !client.getChats) {
+            console.log('[READY] Client not fully initialized, skipping chat load');
+            chatsCache = [];
+            return;
+        }
         chatsCache = await client.getChats();
         console.log(`Loaded ${chatsCache.length} chats`);
         
@@ -1383,15 +1592,25 @@ client.on('ready', async () => {
     }
     
     // Run additional channel discovery (finds newsletters and other sources)
-    discoverChannels();
+    // Wrap in try-catch to prevent crashes
+    try {
+        await discoverChannels();
+    } catch (err) {
+        console.error('[CHANNEL-DISCOVERY] Error during initial channel discovery:', err.message);
+    }
     
     // Set up periodic channel discovery (every 5 minutes)
-    setInterval(discoverChannels, 5 * 60 * 1000);
+    setInterval(() => {
+        discoverChannels().catch(err => {
+            console.error('[CHANNEL-DISCOVERY] Error during periodic channel discovery:', err.message);
+        });
+    }, 5 * 60 * 1000);
 });
 
 client.on('authenticated', () => {
     waStatus = 'authenticated';
     console.log('WhatsApp client authenticated');
+    // User info (currentUserInfo) is set in 'ready' — library only provides client.info then
 });
 
 client.on('auth_failure', (err) => {
@@ -1419,6 +1638,52 @@ client.on('disconnected', (reason) => {
 client.on('loading_screen', (percent, message) => {
     console.log(`[LOADING] WhatsApp Web loading: ${percent}% - ${message}`);
 });
+
+// Watchdog: if the WhatsApp session is effectively usable (client.info present) but the
+// 'ready' event didn't flip our local state, force state initialization once.
+let watchdogForcedReady = false;
+setInterval(async () => {
+    try {
+        if (ready || watchdogForcedReady || !client) return;
+        if (!client.info || !client.info.wid) return;
+
+        watchdogForcedReady = true;
+        waStatus = 'ready';
+        ready = true;
+        qrCode = null;
+        currentUserInfo = client.info;
+
+        console.log('[WATCHDOG] client.info present while Ready=false; forcing ready state');
+
+        // Initialize account-specific paths (same as in 'ready' handler)
+        const userInfo = getUserIdentifier();
+        if (userInfo) {
+            const phoneNumber = userInfo.id.replace('@c.us', '');
+            if (!accountPaths) {
+                console.log(`[WATCHDOG] Initializing account paths for: ${phoneNumber}`);
+                const initializedPaths = accountPathsModule.initializeAccountPaths(phoneNumber);
+                if (initializedPaths) {
+                    accountPaths = initializedPaths;
+                    initializeJsonFiles();
+                    backupRoutesSetup = false;
+                    setupBackupRoutesForAccount();
+                }
+            }
+        }
+
+        // Load chats cache for UI
+        try {
+            chatsCache = await client.getChats();
+            console.log(`[WATCHDOG] Loaded ${chatsCache.length} chats`);
+        } catch (e) {
+            console.log('[WATCHDOG] Failed to load chats:', e.message);
+            chatsCache = [];
+        }
+    } catch (e) {
+        // Never let watchdog crash the process
+        console.log('[WATCHDOG] Error:', e.message);
+    }
+}, 5000);
 
 client.on('message', async (msg) => {
     console.log('New message received:', msg.body);
@@ -1754,8 +2019,87 @@ async function logLeadAutoChatMessage(leadId, type, message, prompt = '') {
     }
 }
 
+// Clean up session lock files and directories before starting
+function cleanupSessionLocks() {
+    try {
+        const sessionDir = path.join(__dirname, '.wwebjs_auth', 'session');
+        
+        if (fs.existsSync(sessionDir)) {
+            console.log('[CLEANUP] Cleaning up session lock files...');
+            
+            // Remove common lock files
+            const lockFiles = [
+                'SingletonLock',
+                'lockfile',
+                'SingletonSocket',
+                'SingletonCookie'
+            ];
+            
+            // Clean up lock files in root session directory
+            lockFiles.forEach(lockFile => {
+                const lockPath = path.join(sessionDir, lockFile);
+                if (fs.existsSync(lockPath)) {
+                    try {
+                        fs.unlinkSync(lockPath);
+                        console.log(`[CLEANUP] Removed lock file: ${lockFile}`);
+                    } catch (err) {
+                        console.log(`[CLEANUP] Could not remove ${lockFile}: ${err.message}`);
+                    }
+                }
+            });
+            
+            // Also check for lock files in Default subdirectory (Chrome profile)
+            const defaultDir = path.join(sessionDir, 'Default');
+            if (fs.existsSync(defaultDir)) {
+                lockFiles.forEach(lockFile => {
+                    const lockPath = path.join(defaultDir, lockFile);
+                    if (fs.existsSync(lockPath)) {
+                        try {
+                            fs.unlinkSync(lockPath);
+                            console.log(`[CLEANUP] Removed lock file: Default/${lockFile}`);
+                        } catch (err) {
+                            console.log(`[CLEANUP] Could not remove Default/${lockFile}: ${err.message}`);
+                        }
+                    }
+                });
+            }
+            
+            // Try to kill any existing Chrome/Chromium processes using this session
+            try {
+                const { exec } = require('child_process');
+                // Find processes using the session directory
+                exec(`lsof +D "${sessionDir}" 2>/dev/null | grep -i chrome | awk '{print $2}' | sort -u`, (error, stdout) => {
+                    if (!error && stdout.trim()) {
+                        const pids = stdout.trim().split('\n');
+                        pids.forEach(pid => {
+                            try {
+                                process.kill(parseInt(pid), 'SIGTERM');
+                                console.log(`[CLEANUP] Terminated Chrome process: ${pid}`);
+                            } catch (killErr) {
+                                // Process might already be dead
+                            }
+                        });
+                    }
+                });
+            } catch (killError) {
+                // Ignore errors when trying to kill processes
+            }
+            
+            console.log('[CLEANUP] Session cleanup completed');
+        } else {
+            console.log('[CLEANUP] No session directory found, skipping cleanup');
+        }
+    } catch (error) {
+        console.error('[CLEANUP] Error during session cleanup:', error.message);
+        // Don't fail startup if cleanup fails
+    }
+}
+
 // Initialize WhatsApp client with error handling and retry logic
 async function initializeWhatsAppClient() {
+    // Clean up any existing lock files before starting
+    cleanupSessionLocks();
+    
     let retryCount = 0;
     const maxRetries = 3;
     
@@ -1788,17 +2132,25 @@ async function initializeWhatsAppClient() {
                 console.log('[INIT] Retrying in 30 seconds...');
                 
                 // Final retry after 30 seconds
-                setTimeout(async () => {
-                    try {
-                        console.log('[INIT] Final retry attempt...');
-                        await client.initialize();
-                        
-                        // Initialize Cloudflare sync after retry
-                        await initializeCloudflareSync();
-                    } catch (retryErr) {
-                        console.error('[INIT] Retry failed:', retryErr.message);
-                        console.error('[INIT] Full retry error:', retryErr);
-                    }
+                // Wrap in IIFE to properly handle async errors
+                setTimeout(() => {
+                    (async () => {
+                        try {
+                            console.log('[INIT] Final retry attempt...');
+                            await client.initialize();
+                            
+                            // Initialize Cloudflare sync after retry
+                            await initializeCloudflareSync();
+                        } catch (retryErr) {
+                            console.error('[INIT] Retry failed:', retryErr.message);
+                            console.error('[INIT] Full retry error:', retryErr);
+                            // Don't let this crash the server - just log and continue
+                            console.log('[INIT] Server will continue running without WhatsApp client. You can try to reconnect later.');
+                        }
+                    })().catch(err => {
+                        // Catch any unhandled errors from the async IIFE
+                        console.error('[INIT] Unhandled error in final retry:', err);
+                    });
                 }, 30000);
             }
         }
@@ -2409,12 +2761,16 @@ function getDetectedChannels() {
 
 // Proactive channel discovery function
 async function discoverChannels() {
-    if (!ready) return;
+    if (!ready || !client) return;
     
     try {
         console.log('[CHANNEL-DISCOVERY] Starting proactive channel discovery (append-only mode)...');
         
         // Method 1: Get followed channels from WhatsApp
+        if (!client || !client.getChats) {
+            console.log('[CHANNEL-DISCOVERY] Client not ready, skipping discovery');
+            return;
+        }
         const chats = await client.getChats();
         const followedChannels = chats.filter(chat => chat.isChannel);
         
@@ -2462,6 +2818,9 @@ async function discoverChannels() {
         
         // Method 2: Try to get newsletter collection for additional channels
         try {
+            if (!client || !client.pupPage || client.pupPage.isClosed()) {
+                throw new Error('Client or page not available');
+            }
             const newsletterChannels = await client.pupPage.evaluate(async () => {
                 try {
                     const newsletterCollection = window.Store.NewsletterCollection;
@@ -2796,7 +3155,7 @@ app.post('/api/contacts/sync', async (req, res) => {
 app.get('/api/status', (req, res) => {
     // Check if the client is still connected
     let connectionStatus = waStatus;
-    if (ready && client.pupPage) {
+    if (ready && client && client.pupPage) {
         try {
             // Try to access the page to see if it's still connected
             if (client.pupPage.isClosed()) {
@@ -2863,9 +3222,9 @@ app.get('/api/user-info', (req, res) => {
         success: true,
         user: userInfo,
         clientInfo: {
-            isReady: client.isReady,
-            state: client.getState ? client.getState() : 'unknown',
-            hasInfo: !!client.info
+            isReady: client ? client.isReady : false,
+            state: client && client.getState ? client.getState() : 'unknown',
+            hasInfo: client ? !!client.info : false
         }
     });
 });
@@ -3214,10 +3573,10 @@ setTimeout(() => {
 process.on('SIGINT', async () => {
     console.log('\n[SHUTDOWN] Received SIGINT, shutting down gracefully...');
     try {
-        if (client.pupPage && !client.pupPage.isClosed()) {
+        if (client && client.pupPage && !client.pupPage.isClosed()) {
             await client.pupPage.close();
         }
-        if (client.pupBrowser && !client.pupBrowser.isClosed()) {
+        if (client && client.pupBrowser && !client.pupBrowser.isClosed()) {
             await client.pupBrowser.close();
         }
         console.log('[SHUTDOWN] Browser closed successfully');
@@ -3230,10 +3589,10 @@ process.on('SIGINT', async () => {
 process.on('SIGTERM', async () => {
     console.log('\n[SHUTDOWN] Received SIGTERM, shutting down gracefully...');
     try {
-        if (client.pupPage && !client.pupPage.isClosed()) {
+        if (client && client.pupPage && !client.pupPage.isClosed()) {
             await client.pupPage.close();
         }
-        if (client.pupBrowser && !client.pupBrowser.isClosed()) {
+        if (client && client.pupBrowser && !client.pupBrowser.isClosed()) {
             await client.pupBrowser.close();
         }
         console.log('[SHUTDOWN] Browser closed successfully');
@@ -3253,36 +3612,29 @@ async function startServer() {
     console.log(`Web Interface: http://localhost:${PORT}`);
     console.log(`API Status: http://localhost:${PORT}/api/status`);
   }).on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`[ERROR] Port ${PORT} is already in use. Please kill the process using this port or use a different port.`);
-    console.error(`[ERROR] To kill the process: kill -9 $(lsof -t -i:${PORT})`);
-    process.exit(1);
-  } else {
-    console.error(`[ERROR] Failed to start server:`, err.message);
-    process.exit(1);
-  }
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[ERROR] Port ${PORT} is already in use. Please kill the process using this port or use a different port.`);
+      console.error(`[ERROR] To kill the process: kill -9 $(lsof -t -i:${PORT})`);
+      process.exit(1);
+    } else {
+      console.error(`[ERROR] Failed to start server:`, err.message);
+      process.exit(1);
+    }
   });
   
-  // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('[SHUTDOWN] Received SIGTERM, shutting down gracefully...');
-  server.close(() => {
-    console.log('[SHUTDOWN] Server closed');
-    process.exit(0);
-  });
-});
-
-process.on('SIGINT', () => {
-  console.log('[SHUTDOWN] Received SIGINT, shutting down gracefully...');
-  server.close(() => {
-    console.log('[SHUTDOWN] Server closed');
-    process.exit(0);
-  });
-});
+  // Return server instance for potential cleanup
+  return server;
 }
 
-// Start the server
-startServer().catch(console.error);
+// Start the server with proper error handling
+startServer().catch((error) => {
+  console.error('[FATAL] Failed to start server:', error);
+  console.error('[FATAL] Stack trace:', error.stack);
+  // Give some time for logs to flush before exiting
+  setTimeout(() => {
+    process.exit(1);
+  }, 1000);
+});
 
 // Get all detected channels (from message stream)
 // Detected channels and discovery routes are now in src/routes/channels.js
@@ -3883,7 +4235,7 @@ app.post('/api/cloudflare/messages/queue', async (req, res) => {
         });
     }
     
-    const { to, message, media, priority, contactName, name } = req.body;
+    const { to, message, media, priority, contactName, name, expiresInHours } = req.body;
     if (!to || !message) {
         return res.status(400).json({ error: 'to and message are required' });
     }
@@ -3897,7 +4249,7 @@ app.post('/api/cloudflare/messages/queue', async (req, res) => {
     
     try {
         // Send user information along with the message for proper user registration
-        const result = await cloudflareClient.queueMessage(to, message, media, priority, userId, finalContactName);
+        const result = await cloudflareClient.queueMessage(to, message, media, priority, userId, finalContactName, expiresInHours);
         res.json({ ...result, available: true, from: userId, contactName: finalContactName });
     } catch (error) {
         res.status(500).json({ 
@@ -3905,6 +4257,280 @@ app.post('/api/cloudflare/messages/queue', async (req, res) => {
             message: 'Unable to queue message in Cloudflare sync service',
             success: false,
             available: false
+        });
+    }
+});
+
+// Get queued messages for current user
+app.get('/api/cloudflare/queue', async (req, res) => {
+    if (!cloudflareClient) {
+        return res.status(503).json({ 
+            error: 'Cloudflare sync not available',
+            message: 'Cloudflare integration is not configured or not connected',
+            success: false,
+            available: false
+        });
+    }
+    
+    try {
+        const userInfo = getUserIdentifier();
+        const userId = userInfo ? userInfo.id : null;
+        
+        const queuedMessages = await cloudflareClient.getQueuedMessages(userId);
+        
+        res.json({ 
+            success: true, 
+            data: queuedMessages || [],
+            count: queuedMessages ? queuedMessages.length : 0,
+            userId: userId,
+            available: true
+        });
+    } catch (error) {
+        console.error('[CLOUDFLARE] Error getting queue:', error);
+        res.status(500).json({ 
+            error: 'Failed to get queued messages',
+            message: error.message,
+            success: false,
+            available: false
+        });
+    }
+});
+
+// Clear queued messages (all or selected)
+app.post('/api/cloudflare/queue/clear', async (req, res) => {
+    if (!cloudflareClient) {
+        return res.status(503).json({ 
+            error: 'Cloudflare sync not available',
+            message: 'Cloudflare integration is not configured or not connected',
+            success: false,
+            available: false
+        });
+    }
+    
+    try {
+        const { messageIds, clearAll } = req.body;
+        const userInfo = getUserIdentifier();
+        const userId = userInfo ? userInfo.id : null;
+        
+        let result;
+        if (clearAll) {
+            // Clear all messages for this user
+            result = await cloudflareClient.clearQueue(userId);
+        } else if (messageIds && messageIds.length > 0) {
+            // Clear specific messages
+            result = await cloudflareClient.clearQueue(userId, messageIds);
+        } else {
+            return res.status(400).json({ 
+                error: 'Either clearAll=true or messageIds array is required',
+                success: false
+            });
+        }
+        
+        // Check if the Cloudflare Worker returned an error (e.g., 404 endpoint not found)
+        if (!result || result.success === false || result.error) {
+            console.log('[CLOUDFLARE] Clear queue failed:', result?.error || 'Unknown error');
+            return res.status(503).json({ 
+                error: 'Clear queue not available',
+                message: result?.error || 'The Cloudflare Worker does not support the clear queue endpoint yet. Messages will be processed normally or expire based on their expiry time.',
+                success: false,
+                available: false
+            });
+        }
+        
+        // Log the clear action
+        appendCloudflareLog({
+            action: 'queue_cleared',
+            userId: userId,
+            clearedCount: result.cleared || 0,
+            messageIds: messageIds || 'all',
+            clearedAt: new Date().toISOString()
+        });
+        
+        res.json({ 
+            success: true, 
+            cleared: result.cleared || 0,
+            message: `Cleared ${result.cleared || 0} queued messages`,
+            available: true
+        });
+    } catch (error) {
+        console.error('[CLOUDFLARE] Error clearing queue:', error);
+        res.status(500).json({ 
+            error: 'Failed to clear queue',
+            message: error.message,
+            success: false,
+            available: false
+        });
+    }
+});
+
+// Get queue message logs (history of processed messages)
+app.get('/api/cloudflare/queue/logs', async (req, res) => {
+    try {
+        if (!accountPaths) {
+            return res.status(503).json({ 
+                error: 'Account not initialized',
+                message: 'Please wait for WhatsApp to connect',
+                success: false
+            });
+        }
+        
+        const { page = 1, limit = 50 } = req.query;
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        
+        // Read cloudflare messages log file
+        let messages = readJson(accountPaths.cloudflareMessagesFile, []);
+        
+        // Ensure it's an array
+        if (!Array.isArray(messages)) {
+            messages = [];
+        }
+        
+        // Sort by timestamp (most recent first)
+        messages.sort((a, b) => new Date(b.timestamp || 0) - new Date(a.timestamp || 0));
+        
+        // Paginate
+        const total = messages.length;
+        const totalPages = Math.ceil(total / limitNum);
+        const startIndex = (pageNum - 1) * limitNum;
+        const paginatedMessages = messages.slice(startIndex, startIndex + limitNum);
+        
+        res.json({ 
+            success: true, 
+            data: paginatedMessages,
+            pagination: {
+                page: pageNum,
+                limit: limitNum,
+                total: total,
+                totalPages: totalPages
+            }
+        });
+    } catch (error) {
+        console.error('[CLOUDFLARE] Error getting queue logs:', error);
+        res.status(500).json({ 
+            error: 'Failed to get queue logs',
+            message: error.message,
+            success: false
+        });
+    }
+});
+
+// Get queue statistics
+app.get('/api/cloudflare/queue/stats', async (req, res) => {
+    if (!cloudflareClient) {
+        return res.status(503).json({ 
+            error: 'Cloudflare sync not available',
+            message: 'Cloudflare integration is not configured or not connected',
+            success: false,
+            available: false
+        });
+    }
+    
+    try {
+        const userInfo = getUserIdentifier();
+        const userId = userInfo ? userInfo.id : null;
+        
+        // Get queued messages count
+        const queuedMessages = await cloudflareClient.getQueuedMessages(userId);
+        const queuedCount = queuedMessages ? queuedMessages.length : 0;
+        
+        // Get processed messages stats from log file
+        let processedStats = { sent: 0, failed: 0, expired: 0, rejected: 0, total: 0 };
+        if (accountPaths) {
+            const messages = readJson(accountPaths.cloudflareMessagesFile, []);
+            if (Array.isArray(messages)) {
+                processedStats.total = messages.length;
+                messages.forEach(msg => {
+                    if (msg.status === 'sent') processedStats.sent++;
+                    else if (msg.status === 'failed') processedStats.failed++;
+                    else if (msg.status === 'expired') processedStats.expired++;
+                    else if (msg.status === 'rejected') processedStats.rejected++;
+                });
+            }
+        }
+        
+        // Get message expiry config
+        const expiryHours = parseInt(process.env.MESSAGE_EXPIRY_HOURS) || 24;
+        
+        // Get rate limit stats
+        const rateLimitStats = rateLimiter.getStats();
+        
+        res.json({ 
+            success: true,
+            stats: {
+                pending: queuedCount,
+                processed: processedStats,
+                expiryHours: expiryHours,
+                rateLimit: {
+                    messagesPerMinute: rateLimitStats.messagesPerMinute,
+                    sentInLastMinute: rateLimitStats.sentInLastMinute,
+                    availableSlots: rateLimitStats.availableSlots,
+                    timeUntilNextSlot: rateLimitStats.timeUntilNextSlot
+                }
+            },
+            userId: userId,
+            available: true
+        });
+    } catch (error) {
+        console.error('[CLOUDFLARE] Error getting queue stats:', error);
+        res.status(500).json({ 
+            error: 'Failed to get queue stats',
+            message: error.message,
+            success: false,
+            available: false
+        });
+    }
+});
+
+// Update message expiry and rate limit configuration
+app.post('/api/cloudflare/queue/config', async (req, res) => {
+    try {
+        const { expiryHours, messagesPerMinute } = req.body;
+        
+        if (expiryHours !== undefined) {
+            const hours = parseInt(expiryHours);
+            if (isNaN(hours) || hours < 0) {
+                return res.status(400).json({ 
+                    error: 'Invalid expiryHours value',
+                    success: false
+                });
+            }
+            
+            // Store in environment (in-memory for this session)
+            // In production, this could be stored in a config file
+            process.env.MESSAGE_EXPIRY_HOURS = hours.toString();
+            
+            console.log(`[CLOUDFLARE] Message expiry set to ${hours} hours`);
+        }
+        
+        if (messagesPerMinute !== undefined) {
+            const rate = parseInt(messagesPerMinute);
+            if (isNaN(rate) || rate < 1 || rate > 60) {
+                return res.status(400).json({ 
+                    error: 'Invalid messagesPerMinute value (must be 1-60)',
+                    success: false
+                });
+            }
+            
+            // Store in environment (in-memory for this session)
+            process.env.MESSAGES_PER_MINUTE = rate.toString();
+            
+            console.log(`[CLOUDFLARE] Rate limit set to ${rate} messages per minute`);
+        }
+        
+        res.json({ 
+            success: true,
+            config: {
+                expiryHours: parseInt(process.env.MESSAGE_EXPIRY_HOURS) || 24,
+                messagesPerMinute: parseInt(process.env.MESSAGES_PER_MINUTE) || 2
+            }
+        });
+    } catch (error) {
+        console.error('[CLOUDFLARE] Error updating queue config:', error);
+        res.status(500).json({ 
+            error: 'Failed to update queue config',
+            message: error.message,
+            success: false
         });
     }
 });
@@ -4151,12 +4777,165 @@ app.use((error, req, res, next) => {
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('[ERROR] Unhandled Rejection at:', promise);
+    console.error('[ERROR] Reason:', reason);
+    if (reason instanceof Error) {
+        console.error('[ERROR] Stack:', reason.stack);
+    }
+    // Don't exit on unhandled rejection - log and continue
+    // This prevents the server from crashing on async errors
 });
 
 // Handle uncaught exceptions
 process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-    process.exit(1);
+    console.error('[FATAL] Uncaught Exception:', error);
+    console.error('[FATAL] Stack:', error.stack);
+    // Only exit on truly fatal errors, but log everything
+    // Give time for logs to flush
+    setTimeout(() => {
+        console.error('[FATAL] Exiting due to uncaught exception...');
+        process.exit(1);
+    }, 1000);
 });
 
+// =============================================================================
+// ADMIN COMMAND LINE TOOLS (Not accessible from web interface)
+// =============================================================================
+// Usage: node server.js --admin-clear-all-queues
+//        node server.js --admin-clear-queue <userId>
+//        node server.js --admin-queue-stats
+// =============================================================================
+
+async function runAdminCommand() {
+    const args = process.argv.slice(2);
+    
+    if (args.length === 0) {
+        return false; // No admin command, continue with normal server startup
+    }
+    
+    const command = args[0];
+    
+    // Initialize Cloudflare client for admin commands
+    const cloudflareBaseUrl = process.env.CLOUDFLARE_BASE_URL;
+    const cloudflareApiKey = process.env.CLOUDFLARE_API_KEY;
+    
+    if (!cloudflareBaseUrl || !cloudflareApiKey) {
+        console.error('[ADMIN] Cloudflare configuration not found. Please set CLOUDFLARE_BASE_URL and CLOUDFLARE_API_KEY in .env');
+        process.exit(1);
+    }
+    
+    const CloudflareClient = require('./cloudflare-client');
+    const adminClient = new CloudflareClient({
+        baseUrl: cloudflareBaseUrl,
+        apiKey: cloudflareApiKey
+    });
+    
+    // Wait for client to connect
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    switch (command) {
+        case '--admin-clear-all-queues':
+            console.log('[ADMIN] Clearing ALL queued messages from ALL app clients...');
+            console.log('[ADMIN] WARNING: This will clear the entire queue on the Cloudflare Worker!');
+            
+            try {
+                // Call clearQueue without a userId to clear all
+                const result = await adminClient.clearQueue(null, null);
+                
+                if (result && result.success !== false) {
+                    console.log(`[ADMIN] Successfully cleared ${result.cleared || 'all'} messages from queue`);
+                } else {
+                    console.error('[ADMIN] Failed to clear queue:', result?.error || 'Unknown error');
+                    console.error('[ADMIN] Note: The Cloudflare Worker may not support this endpoint yet.');
+                }
+            } catch (error) {
+                console.error('[ADMIN] Error clearing queue:', error.message);
+            }
+            
+            process.exit(0);
+            break;
+            
+        case '--admin-clear-queue':
+            const userId = args[1];
+            if (!userId) {
+                console.error('[ADMIN] Usage: node server.js --admin-clear-queue <userId>');
+                console.error('[ADMIN] Example: node server.js --admin-clear-queue 919822218111@c.us');
+                process.exit(1);
+            }
+            
+            console.log(`[ADMIN] Clearing queued messages for user: ${userId}`);
+            
+            try {
+                const result = await adminClient.clearQueue(userId, null);
+                
+                if (result && result.success !== false) {
+                    console.log(`[ADMIN] Successfully cleared ${result.cleared || 'all'} messages for user ${userId}`);
+                } else {
+                    console.error('[ADMIN] Failed to clear queue:', result?.error || 'Unknown error');
+                }
+            } catch (error) {
+                console.error('[ADMIN] Error clearing queue:', error.message);
+            }
+            
+            process.exit(0);
+            break;
+            
+        case '--admin-queue-stats':
+            console.log('[ADMIN] Fetching queue statistics...');
+            
+            try {
+                const stats = await adminClient.getQueueStats(null);
+                
+                if (stats) {
+                    console.log('[ADMIN] Queue Statistics:');
+                    console.log(JSON.stringify(stats, null, 2));
+                } else {
+                    console.error('[ADMIN] Failed to get queue stats');
+                }
+            } catch (error) {
+                console.error('[ADMIN] Error getting stats:', error.message);
+            }
+            
+            process.exit(0);
+            break;
+            
+        case '--help':
+        case '-h':
+            console.log('WhatsApp Web Control Panel - Admin Commands');
+            console.log('');
+            console.log('Usage: node server.js [command] [options]');
+            console.log('');
+            console.log('Commands:');
+            console.log('  (no command)                    Start the server normally');
+            console.log('  --admin-clear-all-queues        Clear ALL queued messages from ALL app clients');
+            console.log('  --admin-clear-queue <userId>    Clear queued messages for a specific user');
+            console.log('                                  Example: --admin-clear-queue 919822218111@c.us');
+            console.log('  --admin-queue-stats             Show queue statistics');
+            console.log('  --help, -h                      Show this help message');
+            console.log('');
+            console.log('Environment Variables:');
+            console.log('  MESSAGE_EXPIRY_HOURS            Default message expiry in hours (default: 24)');
+            console.log('  MESSAGES_PER_MINUTE             Max messages to send per minute (default: 2)');
+            console.log('  CLOUDFLARE_BASE_URL             Cloudflare Worker base URL');
+            console.log('  CLOUDFLARE_API_KEY              Cloudflare Worker API key');
+            console.log('');
+            process.exit(0);
+            break;
+            
+        default:
+            // Not an admin command, continue with normal startup
+            return false;
+    }
+    
+    return true;
+}
+
+// Check for admin commands before starting server
+(async () => {
+    const isAdminCommand = await runAdminCommand();
+    if (isAdminCommand) {
+        // Admin command was executed, don't start server
+        return;
+    }
+    // Continue with normal server startup (server is already started above)
+})();

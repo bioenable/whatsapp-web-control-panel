@@ -27,7 +27,7 @@
     "puppeteer": "^18.2.1",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^9.0.0",
-    "whatsapp-web.js": "^1.34.2"
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
   },
   "engines": {
     "node": ">=18.0.0"

@@ -10,13 +10,18 @@ exports.LoadUtils = () => {
     };
 
     window.WWebJS.sendSeen = async (chatId) => {
-        const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
-        if (chat) {
-            window.Store.WAWebStreamModel.Stream.markAvailable();
-            await window.Store.SendSeen.sendSeen(chat);
-            return true;
+        try {
+            const chat = await window.WWebJS.getChat(chatId, { getAsModel: false });
+            if (chat && chat.markedUnread !== undefined) {
+                window.Store.WAWebStreamModel.Stream.markAvailable();
+                await window.Store.SendSeen.sendSeen(chat);
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.warn('[WWebJS] sendSeen failed:', error.message);
+            return false;
         }
-        return false;
     };
 
     window.WWebJS.sendMessage = async (chat, content, options = {}) => {
@@ -648,16 +653,32 @@ exports.LoadUtils = () => {
         if (chat.groupMetadata) {
             model.isGroup = true;
             const chatWid = window.Store.WidFactory.createWid(chat.id._serialized);
-            await window.Store.GroupMetadata.update(chatWid);
-            chat.groupMetadata.participants._models
-                .filter(x => x.id?._serialized?.endsWith('@lid'))
-                .forEach(x => x.contact?.phoneNumber && (x.id = x.contact.phoneNumber));
+            // Guard against undefined update method (WhatsApp Web API changes)
+            if (window.Store.GroupMetadata && typeof window.Store.GroupMetadata.update === 'function') {
+                try {
+                    await window.Store.GroupMetadata.update(chatWid);
+                } catch (e) {
+                    console.warn('[WWebJS] GroupMetadata.update failed:', e.message);
+                }
+            }
+            if (chat.groupMetadata.participants && chat.groupMetadata.participants._models) {
+                chat.groupMetadata.participants._models
+                    .filter(x => x.id?._serialized?.endsWith('@lid'))
+                    .forEach(x => x.contact?.phoneNumber && (x.id = x.contact.phoneNumber));
+            }
             model.groupMetadata = chat.groupMetadata.serialize();
             model.isReadOnly = chat.groupMetadata.announce;
         }
 
         if (chat.newsletterMetadata) {
-            await window.Store.NewsletterMetadataCollection.update(chat.id);
+            // Guard against undefined update method (WhatsApp Web API changes)
+            if (window.Store.NewsletterMetadataCollection && typeof window.Store.NewsletterMetadataCollection.update === 'function') {
+                try {
+                    await window.Store.NewsletterMetadataCollection.update(chat.id);
+                } catch (e) {
+                    console.warn('[WWebJS] NewsletterMetadataCollection.update failed:', e.message);
+                }
+            }
             model.channelMetadata = chat.newsletterMetadata.serialize();
             model.channelMetadata.createdAtTs = chat.newsletterMetadata.creationTime;
         }

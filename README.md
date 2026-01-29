@@ -684,6 +684,7 @@ Required environment variables:
 - `CLOUDFLARE_API_KEY`: Your secure API key
 - `CLOUDFLARE_SYNC_INTERVAL`: Sync interval in milliseconds
 - `CLOUDFLARE_QUEUE_INTERVAL`: Queue processing interval in milliseconds
+- `MESSAGE_EXPIRY_HOURS`: Default message expiry time in hours (default: 24, 0 = no expiry)
 
 ## 🤝 Contributing
 
@@ -705,6 +706,22 @@ For support and questions:
 - Review the API endpoints in the source code
 
 ## 🔄 Changelog
+
+### v1.34.0
+- **Queue Management System**: New Queue tab in Messages section
+  - View pending messages in Cloudflare queue
+  - Clear all or selected messages from queue
+  - View processing history with status (sent, failed, expired, rejected)
+  - Statistics dashboard for queue monitoring
+- **Message Expiry Feature**: Prevent spam after downtime
+  - Configurable expiry time (default: 24 hours)
+  - Messages older than expiry time are automatically marked as expired
+  - Per-message expiry support via `expiresAt` field
+  - UI control to adjust expiry hours
+- **Enhanced Queue Processing**
+  - Detailed logging of all queue message states
+  - Automatic expiry detection during processing
+  - Better error tracking and reporting
 
 ### v1.33.1
 - Multi-user system implementation

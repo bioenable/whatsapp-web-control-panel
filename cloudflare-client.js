@@ -136,13 +136,22 @@ class CloudflareClient {
   }
 
   // Queue a message for sending
-  async queueMessage(to, message, media, priority, from = null, contactName = null) {
+  async queueMessage(to, message, media, priority, from = null, contactName = null, expiresInHours = null) {
     if (!this.isConnected) return null;
     
     try {
+      const body = { to, message, media, priority, from, contactName };
+      
+      // Add expiry timestamp if provided
+      if (expiresInHours !== null && expiresInHours !== undefined && expiresInHours > 0) {
+        const expiryTime = new Date();
+        expiryTime.setHours(expiryTime.getHours() + expiresInHours);
+        body.expiresAt = expiryTime.toISOString();
+      }
+      
       const result = await this.makeRequest('/api/messages/queue', {
         method: 'POST',
-        body: { to, message, media, priority, from, contactName }
+        body
       });
       return result;
     } catch (error) {
@@ -180,6 +189,42 @@ class CloudflareClient {
     } catch (error) {
       console.log('[CLOUDFLARE] Failed to process messages:', error.message);
       return false;
+    }
+  }
+
+  // Clear queued messages (all or by user)
+  async clearQueue(from = null, messageIds = null) {
+    if (!this.isConnected) return { success: false, error: 'Not connected' };
+    
+    try {
+      const body = {};
+      if (from) body.from = from;
+      if (messageIds && messageIds.length > 0) body.messageIds = messageIds;
+      
+      const result = await this.makeRequest('/api/messages/queue/clear', {
+        method: 'POST',
+        body
+      });
+      
+      console.log(`[CLOUDFLARE] Cleared ${result.cleared || 0} queued messages`);
+      return result;
+    } catch (error) {
+      console.log('[CLOUDFLARE] Failed to clear queue:', error.message);
+      return { success: false, error: error.message };
+    }
+  }
+
+  // Get queue statistics
+  async getQueueStats(from = null) {
+    if (!this.isConnected) return null;
+    
+    try {
+      const endpoint = from ? `/api/messages/queue/stats?from=${encodeURIComponent(from)}` : '/api/messages/queue/stats';
+      const result = await this.makeRequest(endpoint);
+      return result;
+    } catch (error) {
+      console.log('[CLOUDFLARE] Failed to get queue stats:', error.message);
+      return null;
     }
   }
 

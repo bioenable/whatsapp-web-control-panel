@@ -232,3 +232,6 @@ cloudflare/
 
 # Legacy backups folder (now in private-data)
 backups/
+
+# Cloudflare control panel (separate deployment)
+whatsapp-web-control-panel/
