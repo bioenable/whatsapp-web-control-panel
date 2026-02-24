@@ -1134,13 +1134,156 @@ async function processQueuedMessages() {
             throw new Error(sendResult?.error || 'Channel send failed');
           }
         } else {
-          // REGULAR CHAT: Use standard client.sendMessage
-          // Disable sendSeen to avoid "markedUnread" error on new/unloaded chats
-          message = await client.sendMessage(chatId, queuedMsg.message, { media, sendSeen: false });
+          // REGULAR CHAT: Handle WhatsApp's LID (Linked ID) system
+          // WhatsApp now requires LID for message sending - we need to:
+          // 1. Get LID for the phone number
+          // 2. Use proper chat finding method
+          // 3. Send message with correct addressing
+          console.log(`[CLOUDFLARE] Sending to regular chat ${chatId} via direct puppeteer...`);
           
-          // Check if message was sent successfully
-          if (!message || !message.id) {
-            throw new Error('Message send returned empty response - WhatsApp API may be unavailable');
+          const sendResult = await client.pupPage.evaluate(async (phoneId, messageText) => {
+            try {
+              // Step 1: Verify the number exists on WhatsApp and get LID
+              let targetId = phoneId;
+              let lidData = null;
+              
+              try {
+                // Get LID and phone number mapping
+                lidData = await window.WWebJS.enforceLidAndPnRetrieval(phoneId);
+                if (lidData?.lid?._serialized) {
+                  // Use LID if available
+                  targetId = lidData.lid._serialized;
+                }
+              } catch (e) {
+                // Continue with original ID
+              }
+              
+              // Step 2: Create WID for chat lookup
+              const chatWid = window.Store.WidFactory.createWid(targetId);
+              
+              // Step 3: Find or create chat with multiple fallback methods
+              let chat = null;
+              let chatError = null;
+              
+              // Method 1: Direct Chat.get (fastest for existing chats)
+              if (window.Store.Chat?.get) {
+                chat = window.Store.Chat.get(chatWid);
+              }
+              
+              // Method 2: Try Chat.find
+              if (!chat && window.Store.Chat?.find) {
+                try {
+                  chat = await window.Store.Chat.find(chatWid);
+                } catch (e) {
+                  chatError = e.message;
+                }
+              }
+              
+              // Method 3: Try findOrCreateLatestChat (handles LID properly)
+              if (!chat && window.Store.FindOrCreateChat?.findOrCreateLatestChat) {
+                try {
+                  chat = await window.Store.FindOrCreateChat.findOrCreateLatestChat(chatWid);
+                } catch (e) {
+                  chatError = e.message;
+                }
+              }
+              
+              // Method 4: Also try with original phone ID if LID was used
+              if (!chat && lidData?.phone?._serialized && targetId !== phoneId) {
+                const phoneWid = window.Store.WidFactory.createWid(lidData.phone._serialized);
+                if (window.Store.Chat?.get) {
+                  chat = window.Store.Chat.get(phoneWid);
+                }
+                if (!chat && window.Store.Chat?.find) {
+                  try {
+                    chat = await window.Store.Chat.find(phoneWid);
+                  } catch (e) {
+                    // Continue
+                  }
+                }
+              }
+              
+              if (!chat) {
+                return { 
+                  success: false, 
+                  error: `Could not find or create chat: ${chatError || 'Chat not found'}`,
+                  lidData: lidData ? { lid: lidData.lid?._serialized, phone: lidData.phone?._serialized } : null
+                };
+              }
+              
+              // Step 4: Send message using WWebJS.sendMessage
+              try {
+                const msg = await window.WWebJS.sendMessage(chat, messageText, {});
+                
+                if (!msg || !msg.id) {
+                  return { success: false, error: 'Message send returned empty response' };
+                }
+                
+                return { 
+                  success: true, 
+                  messageId: msg.id._serialized || msg.id.id || 'sent',
+                  ack: msg.ack,
+                  usedLid: targetId !== phoneId
+                };
+              } catch (sendErr) {
+                // If LID error on send, try direct addAndSendMsgToChat with simpler message
+                if (sendErr.message && sendErr.message.includes('Lid')) {
+                  try {
+                    // Create a minimal message structure
+                    const meUser = window.Store.User.getMaybeMePnUser() || window.Store.User.getMaybeMeLidUser();
+                    const newId = await window.Store.MsgKey.newId();
+                    
+                    const newMsgKey = new window.Store.MsgKey({
+                      from: meUser,
+                      to: chat.id,
+                      id: newId,
+                      selfDir: 'out',
+                    });
+                    
+                    const message = {
+                      id: newMsgKey,
+                      ack: 0,
+                      body: messageText,
+                      from: meUser,
+                      to: chat.id,
+                      local: true,
+                      self: 'out',
+                      t: Math.floor(Date.now() / 1000),
+                      isNewMsg: true,
+                      type: 'chat'
+                    };
+                    
+                    const [msgPromise] = window.Store.SendMessage.addAndSendMsgToChat(chat, message);
+                    await msgPromise;
+                    
+                    const sentMsg = window.Store.Msg.get(newMsgKey._serialized);
+                    
+                    return {
+                      success: true,
+                      messageId: sentMsg?.id?._serialized || newId || 'sent-direct',
+                      method: 'addAndSendMsgToChat-fallback'
+                    };
+                  } catch (directErr) {
+                    return { 
+                      success: false, 
+                      error: `Direct send fallback failed: ${directErr.message}`,
+                      originalError: sendErr.message
+                    };
+                  }
+                }
+                throw sendErr;
+              }
+            } catch (e) {
+              return { success: false, error: e.message || String(e) };
+            }
+          }, chatId, queuedMsg.message);
+          
+          if (sendResult.success) {
+            console.log(`[CLOUDFLARE] Regular chat message sent: ${sendResult.messageId}${sendResult.usedLid ? ' (via LID)' : ''}${sendResult.method ? ` [${sendResult.method}]` : ''}`);
+            message = { id: { _serialized: sendResult.messageId } };
+          } else {
+            console.log(`[CLOUDFLARE] Send details:`, JSON.stringify(sendResult));
+            throw new Error(sendResult?.error || 'Regular chat send failed');
           }
         }
         
