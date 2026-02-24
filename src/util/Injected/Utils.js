@@ -633,7 +633,19 @@ exports.LoadUtils = () => {
     };
 
     window.WWebJS.getChannels = async () => {
-        const channels = window.Store.NewsletterCollection.getModelsArray();
+        // WhatsApp Web API changed: Try multiple fallbacks for newsletter collection
+        const newsletterStore = window.Store.NewsletterCollection || window.Store.WAWebNewsletterCollection;
+        if (!newsletterStore || typeof newsletterStore.getModelsArray !== 'function') {
+            // Fallback: filter channels from Chat collection
+            const allChats = window.Store.Chat.getModelsArray();
+            const channels = allChats.filter(chat => 
+                chat.id?._serialized?.endsWith('@newsletter') || 
+                window.Store.ChatGetters?.getIsNewsletter?.(chat)
+            );
+            const channelPromises = channels.map((channel) => window.WWebJS.getChatModel(channel, { isChannel: true }));
+            return await Promise.all(channelPromises);
+        }
+        const channels = newsletterStore.getModelsArray();
         const channelPromises = channels?.map((channel) => window.WWebJS.getChatModel(channel, { isChannel: true }));
         return await Promise.all(channelPromises);
     };
@@ -653,12 +665,13 @@ exports.LoadUtils = () => {
         if (chat.groupMetadata) {
             model.isGroup = true;
             const chatWid = window.Store.WidFactory.createWid(chat.id._serialized);
-            // Guard against undefined update method (WhatsApp Web API changes)
-            if (window.Store.GroupMetadata && typeof window.Store.GroupMetadata.update === 'function') {
+            // WhatsApp Web API changed: GroupMetadata renamed to WAWebGroupMetadataCollection
+            const groupMetadataStore = window.Store.GroupMetadata || window.Store.WAWebGroupMetadataCollection;
+            if (groupMetadataStore && typeof groupMetadataStore.update === 'function') {
                 try {
-                    await window.Store.GroupMetadata.update(chatWid);
+                    await groupMetadataStore.update(chatWid);
                 } catch (e) {
-                    console.warn('[WWebJS] GroupMetadata.update failed:', e.message);
+                    // Silently ignore - metadata update is optional
                 }
             }
             if (chat.groupMetadata.participants && chat.groupMetadata.participants._models) {
@@ -671,12 +684,13 @@ exports.LoadUtils = () => {
         }
 
         if (chat.newsletterMetadata) {
-            // Guard against undefined update method (WhatsApp Web API changes)
-            if (window.Store.NewsletterMetadataCollection && typeof window.Store.NewsletterMetadataCollection.update === 'function') {
+            // WhatsApp Web API changed: Try multiple fallbacks for newsletter metadata
+            const newsletterMetadataStore = window.Store.NewsletterMetadataCollection || window.Store.WAWebNewsletterMetadataCollection;
+            if (newsletterMetadataStore && typeof newsletterMetadataStore.update === 'function') {
                 try {
-                    await window.Store.NewsletterMetadataCollection.update(chat.id);
+                    await newsletterMetadataStore.update(chat.id);
                 } catch (e) {
-                    console.warn('[WWebJS] NewsletterMetadataCollection.update failed:', e.message);
+                    // Silently ignore - metadata update is optional
                 }
             }
             model.channelMetadata = chat.newsletterMetadata.serialize();

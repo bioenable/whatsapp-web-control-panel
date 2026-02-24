@@ -954,8 +954,13 @@ async function processQueuedMessages() {
         const chatId = queuedMsg.to;
         const contactName = queuedMsg.contactName || queuedMsg.name || chatId;
         
-        // Ensure contact exists before sending message
-        await ensureContactExists(chatId, contactName);
+        // Check if this is a channel/newsletter message
+        const isChannel = chatId.endsWith('@newsletter') || chatId.endsWith('@broadcast');
+        
+        // Ensure contact exists before sending message (skip for channels)
+        if (!isChannel) {
+          await ensureContactExists(chatId, contactName);
+        }
         
         // Send the message
         let media = null;
@@ -984,12 +989,159 @@ async function processQueuedMessages() {
           }
         }
         
-        // Disable sendSeen to avoid "markedUnread" error on new/unloaded chats
-        const message = await client.sendMessage(chatId, queuedMsg.message, { media, sendSeen: false });
+        let message = null;
         
-        // Check if message was sent successfully
-        if (!message || !message.id) {
-          throw new Error('Message send returned empty response - WhatsApp API may be unavailable');
+        // CHANNEL HANDLING: Use direct puppeteer for newsletters (WhatsApp Web API changed)
+        if (isChannel) {
+          console.log(`[CLOUDFLARE] Sending to channel ${chatId} via direct puppeteer...`);
+          
+          // Note: Media for channels is not yet supported via direct puppeteer - text only
+          if (media) {
+            console.warn(`[CLOUDFLARE] Media not yet supported for channel messages via queue, sending text only`);
+          }
+          
+          const sendResult = await client.pupPage.evaluate(async (channelId, messageText) => {
+            try {
+              const chatWid = window.Store.WidFactory.createWid(channelId);
+              let chat = null;
+              
+              // Method 1: Try to get chat from Chat store
+              try {
+                chat = window.Store.Chat.get(chatWid);
+              } catch (e) {}
+              
+              // Method 2: Try NewsletterCollection if exists
+              if (!chat) {
+                const newsletterStore = window.Store.NewsletterCollection || window.Store.WAWebNewsletterCollection;
+                if (newsletterStore) {
+                  try {
+                    chat = newsletterStore.get(channelId);
+                    if (!chat && typeof newsletterStore.find === 'function') {
+                      chat = await newsletterStore.find(chatWid);
+                    }
+                  } catch (e) {}
+                }
+              }
+              
+              // Method 3: Try to find in all chats by ID
+              if (!chat) {
+                try {
+                  const allChats = window.Store.Chat.getModelsArray();
+                  chat = allChats.find(c => c.id?._serialized === channelId);
+                } catch (e) {}
+              }
+              
+              // Method 4: Try loading the newsletter preview (forces WhatsApp to fetch it)
+              if (!chat && window.Store.ChannelUtils?.loadNewsletterPreviewChat) {
+                try {
+                  await window.Store.ChannelUtils.loadNewsletterPreviewChat(channelId);
+                  // Wait a bit for the chat to be added to store
+                  await new Promise(r => setTimeout(r, 500));
+                  
+                  // Try again after loading
+                  chat = window.Store.Chat.get(chatWid);
+                  if (!chat) {
+                    const allChats = window.Store.Chat.getModelsArray();
+                    chat = allChats.find(c => c.id?._serialized === channelId);
+                  }
+                } catch (e) {}
+              }
+              
+              // Method 5: Try FindOrCreateChat as last resort
+              if (!chat && window.Store.FindOrCreateChat?.findChat) {
+                try {
+                  chat = await window.Store.FindOrCreateChat.findChat(chatWid);
+                } catch (e) {}
+              }
+              
+              if (!chat) {
+                return { success: false, error: 'Channel not found in any store after all attempts' };
+              }
+              
+              // Get current user (handle API changes)
+              let meUser;
+              if (typeof window.Store?.User?.getMaybeMePnUser === 'function') {
+                meUser = window.Store.User.getMaybeMePnUser();
+              } else if (typeof window.Store?.User?.getMaybeMeUser === 'function') {
+                meUser = window.Store.User.getMaybeMeUser();
+              }
+              
+              if (!meUser) {
+                return { success: false, error: 'Cannot get current user' };
+              }
+              
+              // Check admin rights for the channel
+              const membershipType = chat.newsletterMetadata?.membershipType;
+              if (membershipType === 'subscriber') {
+                return { success: false, error: 'No admin rights - subscriber only' };
+              }
+              
+              // Create proper message key (required for WhatsApp message structure)
+              const newId = await window.Store.MsgKey.newId();
+              const newMsgKey = new window.Store.MsgKey({
+                from: meUser,
+                to: chat.id,
+                id: newId,
+                selfDir: 'out'
+              });
+              
+              // Create message with proper structure
+              const message = {
+                id: newMsgKey,
+                ack: 0,
+                body: messageText,
+                from: meUser,
+                to: chat.id,
+                local: true,
+                self: 'out',
+                t: Math.floor(Date.now() / 1000),
+                isNewMsg: true,
+                type: 'chat'
+              };
+              
+              const msg = new window.Store.Msg.modelClass(message);
+              const msgData = window.Store.SendChannelMessage.msgDataFromMsgModel(msg);
+              
+              await window.Store.SendChannelMessage.addNewsletterMsgsRecords([msgData]);
+              chat.msgs.add(msg);
+              chat.t = msg.t;
+              
+              const sendResponse = await window.Store.SendChannelMessage.sendNewsletterMessageJob({
+                msg: msg,
+                type: 'text',
+                newsletterJid: chat.id.toJid()
+              });
+              
+              if (sendResponse.success) {
+                msg.t = sendResponse.ack.t;
+                msg.serverId = sendResponse.serverId;
+                msg.updateAck(1, true);
+                await window.Store.SendChannelMessage.updateNewsletterMsgRecord(msg);
+                return { success: true, messageId: msg.id?._serialized || newId || 'sent' };
+              } else {
+                return { success: false, error: 'sendNewsletterMessageJob failed: ' + JSON.stringify(sendResponse) };
+              }
+            } catch (err) {
+              return { success: false, error: err.message || 'Unknown error' };
+            }
+          }, chatId, queuedMsg.message);
+          
+          if (sendResult && sendResult.success) {
+            console.log(`[CLOUDFLARE] Channel message sent: ${sendResult.messageId}`);
+            // Create a mock message object for consistency
+            message = { id: { _serialized: sendResult.messageId } };
+          } else {
+            throw new Error(sendResult?.error || 'Channel send failed');
+          }
+        } else {
+          // REGULAR CHAT: Use standard client.sendMessage
+          // Disable sendSeen to avoid "markedUnread" error on new/unloaded chats
+          message = await client.sendMessage(chatId, queuedMsg.message, { media, sendSeen: false });
+          
+          // Check if message was sent successfully
+          if (!message || !message.id) {
+            throw new Error('Message send returned empty response - WhatsApp API may be unavailable');
+          }
         }
         
         // Record this send for rate limiting
@@ -2205,12 +2357,33 @@ setInterval(async () => {
             // Handle CHANNEL messages
             if (isChannel) {
                 try {
-                    const channel = await client.getChatById(chatId);
+                    let channel = null;
+                    
+                    // Method 1: Try getChatById
+                    try {
+                        channel = await client.getChatById(chatId);
+                    } catch (e) {
+                        console.log(`[BULK] getChatById failed for channel ${chatId}: ${e.message}`);
+                    }
+                    
+                    // Method 2: If getChatById failed, try getChannels()
+                    if (!channel) {
+                        console.log(`[BULK] Trying getChannels() to find ${chatId}...`);
+                        try {
+                            const allChannels = await client.getChannels();
+                            if (allChannels && allChannels.length > 0) {
+                                channel = allChannels.find(c => 
+                                    c.id?._serialized === chatId || 
+                                    c.id?.user === chatId.replace('@newsletter', '')
+                                );
+                            }
+                        } catch (e) {
+                            console.log(`[BULK] getChannels failed: ${e.message}`);
+                        }
+                    }
+                    
                     if (!channel) {
                         throw new Error(`Channel not found: ${chatId}`);
-                    }
-                    if (!channel.isChannel) {
-                        throw new Error(`Not a channel: ${chatId}`);
                     }
                     if (channel.isReadOnly) {
                         throw new Error(`No admin rights for channel: ${channel.name || chatId}. Cannot send messages.`);
@@ -2488,8 +2661,13 @@ setInterval(async () => {
             let chatHistory = '';
             try {
                 const chat = await client.getChatById(automation.chatId);
-                const msgs = await chat.fetchMessages({ limit: 100 });
-                chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body}`).join('\n');
+                if (chat && typeof chat.fetchMessages === 'function') {
+                    const msgs = await chat.fetchMessages({ limit: 100 });
+                    chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body}`).join('\n');
+                } else {
+                    // Chat object doesn't support fetchMessages (common with channels in new WhatsApp Web)
+                    console.log(`[AUTOMATION] Chat ${automation.chatName} doesn't support fetchMessages, continuing without history`);
+                }
             } catch (err) {
                 console.error(`[AUTOMATION] Failed to get chat history for ${automation.chatName}:`, err.message);
                 // Continue without chat history if frame is detached
@@ -2575,16 +2753,138 @@ setInterval(async () => {
             const isChannel = automation.automationType === 'channel' || automation.chatId.endsWith('@newsletter') || automation.chatId.endsWith('@broadcast');
             
             if (isChannel) {
-                // For channels, use channel.sendMessage() method
+                // WhatsApp Web API has changed - use direct puppeteer evaluation
                 try {
-                    const channel = await client.getChatById(automation.chatId);
-                    if (!channel.isChannel) {
-                        throw new Error('Not a channel');
+                    console.log(`[AUTOMATION] Sending to channel ${automation.chatName} via direct puppeteer...`);
+                    
+                    const sendResult = await client.pupPage.evaluate(async (channelId, messageText) => {
+                        try {
+                            const chatWid = window.Store.WidFactory.createWid(channelId);
+                            let chat = null;
+                            
+                            // Method 1: Try to get chat from Chat store
+                            try {
+                                chat = window.Store.Chat.get(chatWid);
+                            } catch (e) {}
+                            
+                            // Method 2: Try NewsletterCollection if exists
+                            if (!chat) {
+                                const newsletterStore = window.Store.NewsletterCollection || window.Store.WAWebNewsletterCollection;
+                                if (newsletterStore) {
+                                    try {
+                                        chat = newsletterStore.get(channelId);
+                                        if (!chat && typeof newsletterStore.find === 'function') {
+                                            chat = await newsletterStore.find(chatWid);
+                                        }
+                                    } catch (e) {}
+                                }
+                            }
+                            
+                            // Method 3: Try to find in all chats by ID
+                            if (!chat) {
+                                try {
+                                    const allChats = window.Store.Chat.getModelsArray();
+                                    chat = allChats.find(c => c.id?._serialized === channelId);
+                                } catch (e) {}
+                            }
+                            
+                            // Method 4: Try loading the newsletter preview
+                            if (!chat && window.Store.ChannelUtils?.loadNewsletterPreviewChat) {
+                                try {
+                                    await window.Store.ChannelUtils.loadNewsletterPreviewChat(channelId);
+                                    await new Promise(r => setTimeout(r, 500));
+                                    chat = window.Store.Chat.get(chatWid);
+                                    if (!chat) {
+                                        const allChats = window.Store.Chat.getModelsArray();
+                                        chat = allChats.find(c => c.id?._serialized === channelId);
+                                    }
+                                } catch (e) {}
+                            }
+                            
+                            // Method 5: Try FindOrCreateChat as last resort
+                            if (!chat && window.Store.FindOrCreateChat?.findChat) {
+                                try {
+                                    chat = await window.Store.FindOrCreateChat.findChat(chatWid);
+                                } catch (e) {}
+                            }
+                            
+                            if (!chat) {
+                                return { success: false, error: 'Channel not found in any store after all attempts' };
+                            }
+                            
+                            // Get current user (handle API changes)
+                            let meUser;
+                            if (typeof window.Store?.User?.getMaybeMePnUser === 'function') {
+                                meUser = window.Store.User.getMaybeMePnUser();
+                            } else if (typeof window.Store?.User?.getMaybeMeUser === 'function') {
+                                meUser = window.Store.User.getMaybeMeUser();
+                            }
+                            
+                            if (!meUser) {
+                                return { success: false, error: 'Cannot get current user' };
+                            }
+                            
+                            // Check admin rights
+                            const membershipType = chat.newsletterMetadata?.membershipType;
+                            if (membershipType === 'subscriber') {
+                                return { success: false, error: 'No admin rights - subscriber only' };
+                            }
+                            
+                            // Create proper message key
+                            const newId = await window.Store.MsgKey.newId();
+                            const newMsgKey = new window.Store.MsgKey({
+                                from: meUser,
+                                to: chat.id,
+                                id: newId,
+                                selfDir: 'out'
+                            });
+                            
+                            // Create message with proper structure
+                            const message = {
+                                id: newMsgKey,
+                                ack: 0,
+                                body: messageText,
+                                from: meUser,
+                                to: chat.id,
+                                local: true,
+                                self: 'out',
+                                t: Math.floor(Date.now() / 1000),
+                                isNewMsg: true,
+                                type: 'chat'
+                            };
+                            
+                            const msg = new window.Store.Msg.modelClass(message);
+                            const msgData = window.Store.SendChannelMessage.msgDataFromMsgModel(msg);
+                            
+                            await window.Store.SendChannelMessage.addNewsletterMsgsRecords([msgData]);
+                            chat.msgs.add(msg);
+                            chat.t = msg.t;
+                            
+                            const sendResponse = await window.Store.SendChannelMessage.sendNewsletterMessageJob({
+                                msg: msg,
+                                type: 'text',
+                                newsletterJid: chat.id.toJid()
+                            });
+                            
+                            if (sendResponse.success) {
+                                msg.t = sendResponse.ack.t;
+                                msg.serverId = sendResponse.serverId;
+                                msg.updateAck(1, true);
+                                await window.Store.SendChannelMessage.updateNewsletterMsgRecord(msg);
+                                return { success: true, messageId: msg.id?._serialized || newId || 'sent' };
+                            } else {
+                                return { success: false, error: 'sendNewsletterMessageJob failed: ' + JSON.stringify(sendResponse) };
+                            }
+                        } catch (err) {
+                            return { success: false, error: err.message || 'Unknown error' };
+                        }
+                    }, automation.chatId, scheduledMessage);
+                    
+                    if (sendResult && sendResult.success) {
+                        console.log(`[AUTOMATION] Message sent to channel ${automation.chatName}: ${sendResult.messageId}`);
+                    } else {
+                        throw new Error(sendResult?.error || 'Direct send failed');
                     }
-                    if (channel.isReadOnly) {
-                        throw new Error('Not a channel admin');
-                    }
-                    await channel.sendMessage(scheduledMessage);
                 } catch (err) {
                     console.error(`[AUTOMATION] Failed to send to channel ${automation.chatName}:`, err.message);
                     if (err.message.includes('detached Frame')) {

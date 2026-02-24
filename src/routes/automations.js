@@ -267,9 +267,15 @@ function setupAutomationRoutes(app, {
             let chatHistory = '';
             try {
                 const chat = await client.getChatById(automation.chatId);
-                const msgs = await chat.fetchMessages({ limit: 100 });
-                chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body}`).join('\n');
-                testLog.chatHistoryLength = chatHistory.length;
+                if (chat && typeof chat.fetchMessages === 'function') {
+                    const msgs = await chat.fetchMessages({ limit: 100 });
+                    chatHistory = msgs.map(m => `${m.fromMe ? 'Me' : 'User'}: ${m.body}`).join('\n');
+                    testLog.chatHistoryLength = chatHistory.length;
+                } else {
+                    // Chat object doesn't support fetchMessages (common with channels in new WhatsApp Web)
+                    testLog.chatHistoryError = 'Chat does not support fetchMessages';
+                    chatHistory = '(No chat history available - channel API limitation)';
+                }
             } catch (err) {
                 console.error(`[AUTOMATION TEST] Failed to get chat history:`, err.message);
                 testLog.chatHistoryError = err.message;
@@ -414,25 +420,149 @@ Return ONLY the JSON object.`;
                         
                         if (isChannel) {
                             try {
-                                const channel = await client.getChatById(automation.chatId);
-                                if (!channel.isChannel) {
-                                    throw new Error('Not a channel');
+                                // WhatsApp Web API has changed - NewsletterCollection no longer exists
+                                // We need to use direct puppeteer evaluation to send to channels
+                                console.log(`[AUTOMATION TEST] Attempting to send to channel via direct puppeteer evaluation...`);
+                                
+                                // Try direct puppeteer evaluate to send to newsletter
+                                const sendResult = await client.pupPage.evaluate(async (channelId, messageText) => {
+                                    try {
+                                        // Try to get the chat from the Chat store first
+                                        const chatWid = window.Store.WidFactory.createWid(channelId);
+                                        let chat = null;
+                                        
+                                        // Method 1: Try Chat.get
+                                        try {
+                                            chat = window.Store.Chat.get(chatWid);
+                                        } catch (e) {}
+                                        
+                                        // Method 2: Try NewsletterCollection if it exists
+                                        if (!chat && window.Store.NewsletterCollection) {
+                                            try {
+                                                chat = window.Store.NewsletterCollection.get(channelId);
+                                                if (!chat) {
+                                                    await window.Store.ChannelUtils?.loadNewsletterPreviewChat?.(channelId);
+                                                    chat = await window.Store.NewsletterCollection.find(chatWid);
+                                                }
+                                            } catch (e) {}
+                                        }
+                                        
+                                        // Method 3: Try to find it via Chat collection with newsletter filter
+                                        if (!chat) {
+                                            try {
+                                                const allChats = window.Store.Chat.getModelsArray();
+                                                chat = allChats.find(c => c.id?._serialized === channelId);
+                                            } catch (e) {}
+                                        }
+                                        
+                                        if (!chat) {
+                                            return { success: false, error: 'Channel not found in any store' };
+                                        }
+                                        
+                                        // Check if we can send to this channel
+                                        const isNewsletter = window.Store.ChatGetters?.getIsNewsletter?.(chat) || 
+                                                           channelId.includes('@newsletter');
+                                        
+                                        if (!isNewsletter) {
+                                            return { success: false, error: 'Not a newsletter/channel' };
+                                        }
+                                        
+                                        // Check admin rights
+                                        const membershipType = chat.newsletterMetadata?.membershipType;
+                                        if (membershipType === 'subscriber') {
+                                            return { success: false, error: 'No admin rights - subscriber only' };
+                                        }
+                                        
+                                        // Get current user (handle API changes)
+                                        let meUser;
+                                        if (typeof window.Store?.User?.getMaybeMePnUser === 'function') {
+                                            meUser = window.Store.User.getMaybeMePnUser();
+                                        } else if (typeof window.Store?.User?.getMaybeMeUser === 'function') {
+                                            meUser = window.Store.User.getMaybeMeUser();
+                                        }
+                                        
+                                        if (!meUser) {
+                                            return { success: false, error: 'Cannot get current user' };
+                                        }
+                                        
+                                        // Create proper message key (required for WhatsApp message structure)
+                                        const newId = await window.Store.MsgKey.newId();
+                                        const newMsgKey = new window.Store.MsgKey({
+                                            from: meUser,
+                                            to: chat.id,
+                                            id: newId,
+                                            selfDir: 'out'
+                                        });
+                                        
+                                        // Create message with proper structure
+                                        const message = {
+                                            id: newMsgKey,
+                                            ack: 0,
+                                            body: messageText,
+                                            from: meUser,
+                                            to: chat.id,
+                                            local: true,
+                                            self: 'out',
+                                            t: Math.floor(Date.now() / 1000),
+                                            isNewMsg: true,
+                                            type: 'chat'
+                                        };
+                                        
+                                        const msg = new window.Store.Msg.modelClass(message);
+                                        const msgDataFromMsgModel = window.Store.SendChannelMessage.msgDataFromMsgModel(msg);
+                                        
+                                        await window.Store.SendChannelMessage.addNewsletterMsgsRecords([msgDataFromMsgModel]);
+                                        chat.msgs.add(msg);
+                                        chat.t = msg.t;
+                                        
+                                        const sendResponse = await window.Store.SendChannelMessage.sendNewsletterMessageJob({
+                                            msg: msg,
+                                            type: 'text',
+                                            newsletterJid: chat.id.toJid()
+                                        });
+                                        
+                                        if (sendResponse.success) {
+                                            msg.t = sendResponse.ack.t;
+                                            msg.serverId = sendResponse.serverId;
+                                            msg.updateAck(1, true);
+                                            await window.Store.SendChannelMessage.updateNewsletterMsgRecord(msg);
+                                            return { success: true, messageId: msg.id?._serialized || newId || 'sent' };
+                                        } else {
+                                            return { success: false, error: 'sendNewsletterMessageJob failed: ' + JSON.stringify(sendResponse) };
+                                        }
+                                    } catch (err) {
+                                        return { success: false, error: err.message || 'Unknown error' };
+                                    }
+                                }, automation.chatId, finalMessage);
+                                
+                                console.log(`[AUTOMATION TEST] Direct puppeteer send result:`, sendResult);
+                                
+                                if (sendResult && sendResult.success) {
+                                    testLog.final.sent = true;
+                                    testLog.final.sentTo = 'channel';
+                                    testLog.final.messageId = sendResult.messageId;
+                                    console.log(`[AUTOMATION TEST] Message sent to channel: ${sendResult.messageId}`);
+                                } else {
+                                    testLog.final.sent = false;
+                                    testLog.final.sendError = sendResult?.error || 'Direct send failed';
+                                    console.log(`[AUTOMATION TEST] Message send failed: ${sendResult?.error}`);
                                 }
-                                if (channel.isReadOnly) {
-                                    throw new Error('Not a channel admin');
-                                }
-                                await channel.sendMessage(finalMessage);
-                                testLog.final.sent = true;
-                                testLog.final.sentTo = 'channel';
                             } catch (sendErr) {
                                 testLog.final.sent = false;
                                 testLog.final.sendError = sendErr.message;
+                                console.log(`[AUTOMATION TEST] Send error: ${sendErr.message}`);
                             }
                         } else {
                             try {
-                                await client.sendMessage(automation.chatId, finalMessage);
-                                testLog.final.sent = true;
-                                testLog.final.sentTo = 'chat';
+                                const sendResult = await client.sendMessage(automation.chatId, finalMessage);
+                                if (sendResult && sendResult.id) {
+                                    testLog.final.sent = true;
+                                    testLog.final.sentTo = 'chat';
+                                    testLog.final.messageId = sendResult.id._serialized || sendResult.id.id;
+                                } else {
+                                    testLog.final.sent = false;
+                                    testLog.final.sendError = 'Message send returned empty/undefined';
+                                }
                             } catch (sendErr) {
                                 testLog.final.sent = false;
                                 testLog.final.sendError = sendErr.message;

@@ -18,28 +18,40 @@ function setupChannelsRoutes(app, {
     // List all followed channels (loads from detected_channels.json first, then validates)
     app.get('/api/channels', async (req, res) => {
         const ready = getReady();
-        if (!ready) {
-            // If not ready, return cached channels from detected_channels.json
-            try {
-                const cachedChannels = getDetectedChannels();
+        
+        // Always try to use detected_channels.json as primary source since 
+        // WhatsApp Web API changes broke client.getChats() for newsletters
+        try {
+            const cachedChannels = getDetectedChannels();
+            if (cachedChannels && cachedChannels.length > 0) {
                 const channels = cachedChannels.map(channel => ({
                     id: channel.id,
                     name: channel.name,
-                    description: '',
-                    isReadOnly: channel.isReadOnly !== undefined ? channel.isReadOnly : true, // Default to read-only if unknown
+                    description: channel.description || '',
+                    isReadOnly: channel.isReadOnly !== undefined ? channel.isReadOnly : true,
                     unreadCount: 0,
-                    timestamp: new Date(channel.lastSeen || channel.firstSeen).getTime() / 1000,
+                    timestamp: channel.lastSeen ? new Date(channel.lastSeen).getTime() / 1000 : (channel.firstSeen ? new Date(channel.firstSeen).getTime() / 1000 : 0),
                     type: channel.type || (channel.isNewsletter ? 'newsletter' : 'unknown'),
-                    cached: true
+                    cached: !ready
                 }));
                 return res.json(channels);
-            } catch (err) {
-                return res.status(503).json({ error: 'WhatsApp client not ready and no cached channels available' });
             }
+        } catch (err) {
+            // Continue to try live fetch
         }
+        
+        if (!ready) {
+            return res.status(503).json({ error: 'WhatsApp client not ready and no cached channels available' });
+        }
+        
         try {
             const chats = await client.getChats();
-            const channels = chats.filter(chat => chat.isChannel).map(channel => ({
+            // Filter by both isChannel property AND @newsletter suffix (WhatsApp API changes)
+            const channels = chats.filter(chat => 
+                chat.isChannel || 
+                chat.id?._serialized?.endsWith('@newsletter') ||
+                chat.id?._serialized?.endsWith('@broadcast')
+            ).map(channel => ({
                 id: channel.id._serialized,
                 name: channel.name,
                 description: channel.description,
@@ -466,7 +478,13 @@ function setupChannelsRoutes(app, {
         if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
         try {
             const channel = await client.getChatById(req.params.id);
+            if (!channel) {
+                return res.status(404).json({ error: 'Channel not found - WhatsApp Web API may have changed' });
+            }
             if (!channel.isChannel) return res.status(404).json({ error: 'Not a channel' });
+            if (typeof channel.fetchMessages !== 'function') {
+                return res.status(500).json({ error: 'Channel does not support fetchMessages - API limitation' });
+            }
             const msgs = await channel.fetchMessages({ limit: 50 });
             const result = msgs.map(msg => ({
                 id: msg.id._serialized || msg.id,
@@ -495,6 +513,9 @@ function setupChannelsRoutes(app, {
         if (!ready) return res.status(503).json({ error: 'WhatsApp not ready' });
         try {
             const channel = await client.getChatById(req.params.id);
+            if (!channel) {
+                return res.status(404).json({ error: 'Channel not found - WhatsApp Web API may have changed. Try using the direct channel send method.' });
+            }
             if (!channel.isChannel) return res.status(404).json({ error: 'Not a channel' });
             if (channel.isReadOnly) return res.status(403).json({ error: 'Not a channel admin' });
             const message = req.body?.message || '';
@@ -515,6 +536,9 @@ function setupChannelsRoutes(app, {
                 sent = await channel.sendMessage(media, { caption: message });
             } else {
                 sent = await channel.sendMessage(message);
+            }
+            if (!sent || !sent.id) {
+                return res.status(500).json({ error: 'Message send returned empty response' });
             }
             res.json({ success: true, id: sent.id._serialized });
         } catch (err) {
