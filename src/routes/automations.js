@@ -427,27 +427,28 @@ Return ONLY the JSON object.`;
                                 // Try direct puppeteer evaluate to send to newsletter
                                 const sendResult = await client.pupPage.evaluate(async (channelId, messageText) => {
                                     try {
-                                        // Try to get the chat from the Chat store first
                                         const chatWid = window.Store.WidFactory.createWid(channelId);
                                         let chat = null;
                                         
-                                        // Method 1: Try Chat.get
+                                        // Method 1: Try to get chat from Chat store
                                         try {
                                             chat = window.Store.Chat.get(chatWid);
                                         } catch (e) {}
                                         
-                                        // Method 2: Try NewsletterCollection if it exists
-                                        if (!chat && window.Store.NewsletterCollection) {
-                                            try {
-                                                chat = window.Store.NewsletterCollection.get(channelId);
-                                                if (!chat) {
-                                                    await window.Store.ChannelUtils?.loadNewsletterPreviewChat?.(channelId);
-                                                    chat = await window.Store.NewsletterCollection.find(chatWid);
-                                                }
-                                            } catch (e) {}
+                                        // Method 2: Try NewsletterCollection if exists (with fallback name)
+                                        if (!chat) {
+                                            const newsletterStore = window.Store.NewsletterCollection || window.Store.WAWebNewsletterCollection;
+                                            if (newsletterStore) {
+                                                try {
+                                                    chat = newsletterStore.get(channelId);
+                                                    if (!chat && typeof newsletterStore.find === 'function') {
+                                                        chat = await newsletterStore.find(chatWid);
+                                                    }
+                                                } catch (e) {}
+                                            }
                                         }
                                         
-                                        // Method 3: Try to find it via Chat collection with newsletter filter
+                                        // Method 3: Try to find in all chats by ID
                                         if (!chat) {
                                             try {
                                                 const allChats = window.Store.Chat.getModelsArray();
@@ -455,22 +456,31 @@ Return ONLY the JSON object.`;
                                             } catch (e) {}
                                         }
                                         
+                                        // Method 4: Try loading the newsletter preview (forces WhatsApp to fetch it)
+                                        if (!chat && window.Store.ChannelUtils?.loadNewsletterPreviewChat) {
+                                            try {
+                                                await window.Store.ChannelUtils.loadNewsletterPreviewChat(channelId);
+                                                // Wait a bit for the chat to be added to store
+                                                await new Promise(r => setTimeout(r, 500));
+                                                
+                                                // Try again after loading
+                                                chat = window.Store.Chat.get(chatWid);
+                                                if (!chat) {
+                                                    const allChats = window.Store.Chat.getModelsArray();
+                                                    chat = allChats.find(c => c.id?._serialized === channelId);
+                                                }
+                                            } catch (e) {}
+                                        }
+                                        
+                                        // Method 5: Try FindOrCreateChat as last resort
+                                        if (!chat && window.Store.FindOrCreateChat?.findChat) {
+                                            try {
+                                                chat = await window.Store.FindOrCreateChat.findChat(chatWid);
+                                            } catch (e) {}
+                                        }
+                                        
                                         if (!chat) {
-                                            return { success: false, error: 'Channel not found in any store' };
-                                        }
-                                        
-                                        // Check if we can send to this channel
-                                        const isNewsletter = window.Store.ChatGetters?.getIsNewsletter?.(chat) || 
-                                                           channelId.includes('@newsletter');
-                                        
-                                        if (!isNewsletter) {
-                                            return { success: false, error: 'Not a newsletter/channel' };
-                                        }
-                                        
-                                        // Check admin rights
-                                        const membershipType = chat.newsletterMetadata?.membershipType;
-                                        if (membershipType === 'subscriber') {
-                                            return { success: false, error: 'No admin rights - subscriber only' };
+                                            return { success: false, error: 'Channel not found in any store after all attempts' };
                                         }
                                         
                                         // Get current user (handle API changes)
@@ -483,6 +493,12 @@ Return ONLY the JSON object.`;
                                         
                                         if (!meUser) {
                                             return { success: false, error: 'Cannot get current user' };
+                                        }
+                                        
+                                        // Check admin rights for the channel
+                                        const membershipType = chat.newsletterMetadata?.membershipType;
+                                        if (membershipType === 'subscriber') {
+                                            return { success: false, error: 'No admin rights - subscriber only' };
                                         }
                                         
                                         // Create proper message key (required for WhatsApp message structure)
