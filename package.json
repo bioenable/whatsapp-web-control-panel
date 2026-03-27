@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20250802.0",
-    "@google/genai": "^1.10.0",
+    "@google/genai": "^1.19.0",
     "@pedroslopez/moduleraid": "^5.0.2",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
